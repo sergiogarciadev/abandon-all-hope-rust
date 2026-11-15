@@ -18,7 +18,9 @@ use entities::player::{
 use entities::weapon::{setup_bullet_assets, update_bullets, weapon_input_and_fire};
 use entities::zombies::{chase_zombies, separate_zombies, setup_zombie_assets, update_corpses};
 use game::{check_player_death, pause_toggle, start_first_wave, wave_spawner};
-use ui::upgrades::{UpgradePicker, update_upgrade_picker_timer};
+use ui::upgrades::{
+    UpgradePicker, despawn_temp_upgrade_ui, spawn_temp_upgrade_ui, update_upgrade_picker_timer,
+};
 use world::openings::{Openings, update_openings};
 use world::solids::SolidsNav;
 use world::weather::{setup_weather, update_weather};
@@ -50,6 +52,8 @@ fn main() {
             ..default()
         }))
         .init_state::<GameState>()
+        .add_systems(OnEnter(GameState::ChoosingUpgrade), spawn_temp_upgrade_ui)
+        .add_systems(OnExit(GameState::ChoosingUpgrade), despawn_temp_upgrade_ui)
         .add_systems(
             Startup,
             (

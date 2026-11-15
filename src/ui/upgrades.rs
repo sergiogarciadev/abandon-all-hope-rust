@@ -259,3 +259,52 @@ pub fn update_upgrade_picker_timer(
         }
     }
 }
+
+#[derive(Component)]
+pub struct TempUpgradeOverlay;
+
+/// Temporary Step 7 upgrade prompt so `ChoosingUpgrade` is visible before Step 9 UI.
+pub fn spawn_temp_upgrade_ui(
+    mut commands: Commands,
+    picker: Res<UpgradePicker>,
+    stats: Res<GameStats>,
+) {
+    let mut lines = vec![format!("WAVE {} CLEARED — CHOOSE AN UPGRADE (PRESS 1, 2, OR 3)\n", stats.wave)];
+    for (slot, &idx) in picker.choices.iter().enumerate() {
+        let u = &UPGRADES[idx];
+        let (before, after) = (u.stat)(&stats);
+        lines.push(format!("[{}] {} — {} ({} -> {})", slot + 1, u.name, u.desc, before, after));
+    }
+    let body = lines.join("\n");
+    info!("{body}");
+
+    commands
+        .spawn((
+            TempUpgradeOverlay,
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(24.0),
+                left: Val::Px(24.0),
+                padding: UiRect::all(Val::Px(16.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.03, 0.04, 0.06, 0.85)),
+        ))
+        .with_child((
+            Text::new(body),
+            TextFont {
+                font_size: FontSize::Px(20.0),
+                ..default()
+            },
+            TextColor(Color::srgb(0.95, 0.92, 0.84)),
+        ));
+}
+
+pub fn despawn_temp_upgrade_ui(
+    mut commands: Commands,
+    query: Query<Entity, With<TempUpgradeOverlay>>,
+) {
+    for entity in &query {
+        commands.entity(entity).despawn();
+    }
+}
