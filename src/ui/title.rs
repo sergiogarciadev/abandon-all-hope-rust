@@ -138,8 +138,8 @@ fn make_grain_image() -> Image {
     let mut rng = rand::rng();
     let mut data = Vec::with_capacity(256 * 256 * 4);
     for _ in 0..(256 * 256) {
-        let v: u8 = rng.random_range(0..=255);
-        data.extend_from_slice(&[v, v, v, 8]);
+        let v: u8 = rng.random_range(0..=180);
+        data.extend_from_slice(&[v, v, v, 3]);
     }
     let mut img = Image::new(
         Extent3d {
@@ -896,7 +896,7 @@ pub fn update_title_ui(
             if let Some(ref mut data) = img.data {
                 let mut rng = rand::rng();
                 for chunk in data.chunks_exact_mut(4) {
-                    let v: u8 = rng.random_range(0..=255);
+                    let v: u8 = rng.random_range(0..=180);
                     chunk[0] = v;
                     chunk[1] = v;
                     chunk[2] = v;
