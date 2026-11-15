@@ -1,38 +1,30 @@
 mod core;
 mod effects;
 mod entities;
+mod game;
+mod ui;
 mod world;
 
 use bevy::prelude::*;
 use rand::RngExt;
 
-use core::state::{AimState, GameStats};
+use core::state::{AimState, GameState, GameStats, ToastState};
 use effects::blood::{setup_blood_assets, update_blood_particles};
 use effects::debris::{setup_debris_assets, update_debris};
+use entities::drops::{setup_drop_assets, update_drops};
 use entities::player::{
     PlayerRig, PlayerRigState, animate_player, player_movement_and_aim, setup_player,
 };
 use entities::weapon::{setup_bullet_assets, update_bullets, weapon_input_and_fire};
-use entities::zombies::{
-    chase_zombies, separate_zombies, setup_zombie_assets, update_corpses,
-};
+use entities::zombies::{chase_zombies, separate_zombies, setup_zombie_assets, update_corpses};
+use game::{check_player_death, pause_toggle, start_first_wave, wave_spawner};
+use ui::upgrades::{UpgradePicker, update_upgrade_picker_timer};
 use world::openings::{Openings, update_openings};
 use world::solids::SolidsNav;
+use world::weather::{setup_weather, update_weather};
 use world::world::{WallBoxes, WorldWeatherLevel, setup_world, update_world};
 
 const CAM_OFFSET: Vec3 = Vec3::new(0.0, 30.0, 13.0);
-
-/// High-level game flow states, matching the JS state machine.
-#[derive(States, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[allow(dead_code)]
-enum GameState {
-    #[default]
-    Title,
-    Playing,
-    ChoosingUpgrade,
-    Paused,
-    Dead,
-}
 
 #[derive(Component)]
 struct MainCamera;
@@ -47,6 +39,8 @@ fn main() {
         .init_resource::<PlayerRigState>()
         .init_resource::<GameStats>()
         .init_resource::<AimState>()
+        .init_resource::<ToastState>()
+        .init_resource::<UpgradePicker>()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "ABANDON ALL HOPE".into(),
@@ -66,24 +60,36 @@ fn main() {
                 setup_bullet_assets,
                 setup_blood_assets,
                 setup_debris_assets,
+                setup_drop_assets,
+                setup_weather,
+                start_first_wave.after(setup_weather),
             ),
         )
         .add_systems(
             Update,
             (
+                pause_toggle,
                 update_world,
+                update_weather,
+                update_camera,
+                update_upgrade_picker_timer.run_if(in_state(GameState::ChoosingUpgrade)),
                 (
-                    player_movement_and_aim,
-                    weapon_input_and_fire,
-                    animate_player,
-                    update_bullets,
+                    (
+                        player_movement_and_aim,
+                        weapon_input_and_fire,
+                        animate_player,
+                        update_bullets,
+                    )
+                        .chain(),
+                    (chase_zombies, separate_zombies, update_corpses).chain(),
+                    wave_spawner,
+                    update_drops,
+                    update_openings,
+                    update_debris,
+                    update_blood_particles,
+                    check_player_death,
                 )
-                    .chain(),
-                (chase_zombies, separate_zombies, update_corpses).chain(),
-                update_openings,
-                update_debris,
-                update_blood_particles,
-                update_camera.after(player_movement_and_aim),
+                    .run_if(in_state(GameState::Playing)),
             ),
         )
         .run();

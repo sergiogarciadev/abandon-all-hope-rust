@@ -59,6 +59,12 @@ pub struct LanternGlass;
 #[derive(Resource, Default)]
 pub struct WorldWeatherLevel(pub f32);
 
+#[derive(Resource)]
+pub struct WorldMaterials {
+    pub world_mat: Handle<StandardMaterial>,
+    pub ground_mat: Handle<StandardMaterial>,
+}
+
 #[inline]
 fn at(x: f32, z: f32, ry: f32) -> Mat4 {
     Mat4::from_rotation_translation(Quat::from_rotation_y(ry), Vec3::new(x, 0.0, z))
@@ -443,7 +449,7 @@ pub fn setup_world(
     });
     commands.spawn((
         Mesh3d(meshes.add(Plane3d::default().mesh().size(200.0, 200.0))),
-        MeshMaterial3d(ground_mat),
+        MeshMaterial3d(ground_mat.clone()),
         Transform::from_xyz(0.0, GROUND_Y, 0.0),
     ));
 
@@ -1086,6 +1092,11 @@ pub fn setup_world(
 
     // Initialize solids navigation graph after all solids have been added
     solids.init_nav();
+
+    commands.insert_resource(WorldMaterials {
+        world_mat,
+        ground_mat,
+    });
 }
 
 /// Guttering porch lantern flame: two slow wobbles and the odd dip, worse in the wind.

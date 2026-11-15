@@ -8,6 +8,7 @@ use crate::effects::debris::DebrisAssets;
 use crate::world::openings::{OpeningKind, Openings, break_opening, burst, shut_at};
 use crate::world::world::{WALL_T, WallBoxes};
 
+use super::drops::{DropAssets, maybe_drop};
 use super::player::{PlayerRig, PlayerRigState, trigger_muzzle_flash};
 use super::zombies::{Corpse, Zombie, ZombieAnim, ZombieAssets, zombie_dies};
 
@@ -192,6 +193,7 @@ pub fn update_bullets(
     debris_assets: Res<DebrisAssets>,
     blood_assets: Res<BloodAssets>,
     zombie_assets: Res<ZombieAssets>,
+    drop_assets: Res<DropAssets>,
     mut bullets: Query<(Entity, &mut Transform, &mut Bullet)>,
     mut zombies: Query<(Entity, &mut Transform, &mut Zombie, &mut ZombieAnim), Without<Bullet>>,
     corpses_q: Query<(Entity, &Corpse)>,
@@ -272,6 +274,7 @@ pub fn update_bullets(
 
                     if z_state.hp <= 0.0 {
                         stats.kills += 1;
+                        maybe_drop(&mut commands, &mut stats, &drop_assets, z_tf.translation);
                         zombie_dies(
                             z_ent,
                             &z_tf,

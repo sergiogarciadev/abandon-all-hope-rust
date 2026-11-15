@@ -774,19 +774,6 @@ pub fn setup_zombie_assets(
         pool_mesh,
     };
 
-    // Spawn 4 test zombies outside the cabin (including behind the pickup truck) for Step 6 verification
-    for (i, pos) in [
-        Vec3::new(-9.0, 0.0, 18.0),
-        Vec3::new(0.0, 0.0, 16.0),
-        Vec3::new(14.0, 0.0, 2.5),
-        Vec3::new(-14.0, 0.0, -0.5),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        spawn_zombie(&mut commands, &assets, i, pos, 2.0, 2.2);
-    }
-
     commands.insert_resource(assets);
 }
 

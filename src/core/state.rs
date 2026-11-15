@@ -1,4 +1,16 @@
 use bevy::prelude::*;
+use std::collections::HashMap;
+
+#[derive(States, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[allow(dead_code)]
+pub enum GameState {
+    Title,
+    #[default]
+    Playing,
+    ChoosingUpgrade,
+    Paused,
+    Dead,
+}
 
 #[derive(Resource)]
 #[allow(dead_code)]
@@ -21,9 +33,13 @@ pub struct GameStats {
     pub spread: i32,
     pub speed: f32,
     pub drop_bonus: f32,
+    pub upgrades: HashMap<String, u32>,
     pub p_damage: f32,
     pub p_ammo: f32,
     pub since_drop: u32,
+    pub to_spawn: u32,
+    pub spawn_timer: f32,
+    pub intermission: f32,
     pub zombie_speed: f32,
     pub zombie_hp: f32,
     pub shake: f32,
@@ -50,9 +66,13 @@ impl Default for GameStats {
             spread: 0,
             speed: 6.2,
             drop_bonus: 0.0,
+            upgrades: HashMap::new(),
             p_damage: 0.0,
             p_ammo: 0.0,
             since_drop: 0,
+            to_spawn: 0,
+            spawn_timer: 0.0,
+            intermission: 0.0,
             zombie_speed: 2.2,
             zombie_hp: 2.0,
             shake: 0.0,
@@ -63,4 +83,12 @@ impl Default for GameStats {
 #[derive(Resource, Default)]
 pub struct AimState {
     pub aim_point: Vec3,
+}
+
+#[derive(Resource, Default)]
+#[allow(dead_code)]
+pub struct ToastState {
+    pub text: String,
+    pub color: Color,
+    pub timer: f32,
 }
