@@ -490,13 +490,13 @@ pub fn setup_title_ui(
             (images.add(img), w as f32, h as f32)
         };
     let (abandon_img, abandon_w, abandon_h) =
-        make_title_img("ABANDON", 40.0, 4.0, [0xe9, 0xe2, 0xd6], 4, 4);
+        make_title_img("ABANDON", 52.0, 5.2, [0xe9, 0xe2, 0xd6], 5, 4);
     let (all_hope_img, all_hope_w, all_hope_h) =
-        make_title_img("ALL HOPE", 104.0, 2.0, [0xd6, 0x45, 0x3c], 5, 11);
+        make_title_img("ALL HOPE", 135.2, 2.6, [0xd6, 0x45, 0x3c], 6, 11);
     let (paused_img, paused_w, paused_h) =
-        make_title_img("PAUSED", 82.0, 5.0, [0xe9, 0xe2, 0xd6], 4, 23);
+        make_title_img("PAUSED", 106.6, 6.5, [0xe9, 0xe2, 0xd6], 5, 23);
     let (died_img, died_w, died_h) =
-        make_title_img("YOU DIED", 92.0, 5.0, [0xb8, 0x33, 0x2b], 4, 37);
+        make_title_img("YOU DIED", 119.6, 6.5, [0xb8, 0x33, 0x2b], 5, 37);
 
     // Startup fade-in overlay
     commands.spawn((
@@ -619,9 +619,14 @@ pub fn setup_title_ui(
                     },
                 ))
                 .with_children(|list| {
-                    for (idx, label) in ["01  PLAY", "02  HOW TO PLAY", "03  SETTINGS"]
-                        .iter()
-                        .enumerate()
+                    for (idx, label) in [
+                        "01  PLAY",
+                        "02  HOW TO PLAY",
+                        "03  SETTINGS",
+                        "04  QUIT",
+                    ]
+                    .iter()
+                    .enumerate()
                     {
                         #[allow(deprecated)]
                         list.spawn((
@@ -632,7 +637,7 @@ pub fn setup_title_ui(
                                 border: UiRect::left(Val::Px(5.0)),
                                 ..default()
                             },
-                            BackgroundColor(Color::NONE),
+                            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.85)),
                             BorderColor::all(Color::NONE),
                         ))
                         .with_child((
@@ -962,6 +967,7 @@ pub struct ResetContext<'w> {
     pub flash: ResMut<'w, DamageFlash>,
     pub toast: ResMut<'w, ToastState>,
     pub audio: Res<'w, AudioEngine>,
+    pub exit: MessageWriter<'w, AppExit>,
 }
 
 pub fn clear_run_entities(
@@ -1149,10 +1155,10 @@ pub fn update_title_ui(
         }
     } else {
         if up {
-            ui_state.sel = (ui_state.sel + 2) % 3;
+            ui_state.sel = (ui_state.sel + 3) % 4;
             ctx.audio.ui(UiSound::Move);
         } else if down {
-            ui_state.sel = (ui_state.sel + 1) % 3;
+            ui_state.sel = (ui_state.sel + 1) % 4;
             ctx.audio.ui(UiSound::Move);
         } else if ok {
             activate = Some(ui_state.sel);
@@ -1202,7 +1208,7 @@ pub fn update_title_ui(
                     TitlePanel::How
                 };
             }
-            _ => {
+            2 => {
                 ui_state.panel = if ui_state.panel == TitlePanel::Settings {
                     ctx.audio.ui(UiSound::Back);
                     TitlePanel::None
@@ -1210,6 +1216,10 @@ pub fn update_title_ui(
                     ctx.audio.ui(UiSound::Select);
                     TitlePanel::Settings
                 };
+            }
+            _ => {
+                ctx.audio.ui(UiSound::Back);
+                ctx.exit.write(AppExit::Success);
             }
         }
     }
