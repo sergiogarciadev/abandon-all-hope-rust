@@ -252,7 +252,7 @@ pub fn upgrade_bitmap(id: &str) -> [&'static str; 8] {
             ".X....X.",
             "..XXXX..",
         ],
-        "rof" => [
+        "rate" => [
             "....XXX.",
             "...XXX..",
             "..XXX...",
@@ -262,7 +262,7 @@ pub fn upgrade_bitmap(id: &str) -> [&'static str; 8] {
             ".XX.....",
             ".X......",
         ],
-        "dmg" => [
+        "damage" => [
             ".XXXXXX.",
             "XXXXXXXX",
             "X..XX..X",
@@ -512,8 +512,8 @@ pub fn spawn_upgrade_picker(
                         card.spawn((
                             ImageNode::new(icons.handles[idx].clone()),
                             Node {
-                                width: Val::Px(52.0),
-                                height: Val::Px(52.0),
+                                width: Val::Px(64.0),
+                                height: Val::Px(64.0),
                                 margin: UiRect::vertical(Val::Px(6.0)),
                                 ..default()
                             },

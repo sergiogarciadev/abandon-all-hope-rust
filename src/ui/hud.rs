@@ -353,7 +353,7 @@ pub fn setup_hud(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
                 TextColor(Color::srgba(0.84, 0.27, 0.24, 0.0)),
                 TextShadow {
                     offset: Vec2::new(0.0, 4.0),
-                    color: Color::BLACK,
+                    color: Color::srgba(0.0, 0.0, 0.0, 0.0),
                 },
             ));
             b.spawn((
@@ -366,7 +366,7 @@ pub fn setup_hud(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
                 TextColor(Color::srgba(0.54, 0.56, 0.60, 0.0)),
                 TextShadow {
                     offset: Vec2::new(0.0, 2.0),
-                    color: Color::BLACK,
+                    color: Color::srgba(0.0, 0.0, 0.0, 0.0),
                 },
             ));
         });
@@ -394,7 +394,7 @@ pub fn setup_hud(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
             TextColor(Color::srgba(1.0, 1.0, 1.0, 0.0)),
             TextShadow {
                 offset: Vec2::new(0.0, 3.0),
-                color: Color::BLACK,
+                color: Color::srgba(0.0, 0.0, 0.0, 0.0),
             },
         ));
 }
@@ -413,9 +413,9 @@ pub struct HudQueries<'w, 's> {
     reload_bar: Query<'w, 's, &'static mut Visibility, (With<ReloadBar>, Without<HudRoot>, Without<HeartPip>, Without<MagPip>, Without<ReloadHint>)>,
     reload_fill: Query<'w, 's, &'static mut Node, With<ReloadBarFill>>,
     reload_hint: Query<'w, 's, &'static mut Visibility, (With<ReloadHint>, Without<HudRoot>, Without<HeartPip>, Without<MagPip>, Without<ReloadBar>)>,
-    banner_title: Query<'w, 's, (&'static mut Text, &'static mut TextColor), (With<BannerTitleText>, Without<WaveText>, Without<KillsText>, Without<LeftText>, Without<MutedText>, Without<PowerupsText>, Without<BannerSubText>, Without<ToastText>)>,
-    banner_sub: Query<'w, 's, (&'static mut Text, &'static mut TextColor), (With<BannerSubText>, Without<WaveText>, Without<KillsText>, Without<LeftText>, Without<MutedText>, Without<PowerupsText>, Without<BannerTitleText>, Without<ToastText>)>,
-    toast: Query<'w, 's, (&'static mut Text, &'static mut TextColor), (With<ToastText>, Without<WaveText>, Without<KillsText>, Without<LeftText>, Without<MutedText>, Without<PowerupsText>, Without<BannerTitleText>, Without<BannerSubText>)>,
+    banner_title: Query<'w, 's, (&'static mut Text, &'static mut TextColor, &'static mut TextShadow), (With<BannerTitleText>, Without<WaveText>, Without<KillsText>, Without<LeftText>, Without<MutedText>, Without<PowerupsText>, Without<BannerSubText>, Without<ToastText>)>,
+    banner_sub: Query<'w, 's, (&'static mut Text, &'static mut TextColor, &'static mut TextShadow), (With<BannerSubText>, Without<WaveText>, Without<KillsText>, Without<LeftText>, Without<MutedText>, Without<PowerupsText>, Without<BannerTitleText>, Without<ToastText>)>,
+    toast: Query<'w, 's, (&'static mut Text, &'static mut TextColor, &'static mut TextShadow), (With<ToastText>, Without<WaveText>, Without<KillsText>, Without<LeftText>, Without<MutedText>, Without<PowerupsText>, Without<BannerTitleText>, Without<BannerSubText>)>,
 }
 
 pub fn update_hud(
@@ -451,24 +451,34 @@ pub fn update_hud(
     // Banner & Toast decay
     if banner.timer > 0.0 {
         banner.timer = (banner.timer - dt).max(0.0);
+        if banner.timer <= 0.0 {
+            banner.title.clear();
+            banner.sub.clear();
+        }
     }
     if toast.timer > 0.0 {
         toast.timer = (toast.timer - dt).max(0.0);
+        if toast.timer <= 0.0 {
+            toast.text.clear();
+        }
     }
     let b_alpha = (banner.timer * 2.0).min(1.0);
-    for (mut txt, mut col) in &mut q.banner_title {
+    for (mut txt, mut col, mut sh) in &mut q.banner_title {
         txt.0 = banner.title.clone();
         col.0 = Color::srgba(0.84, 0.27, 0.24, b_alpha);
+        sh.color = Color::srgba(0.0, 0.0, 0.0, b_alpha);
     }
-    for (mut txt, mut col) in &mut q.banner_sub {
+    for (mut txt, mut col, mut sh) in &mut q.banner_sub {
         txt.0 = banner.sub.clone();
         col.0 = Color::srgba(0.54, 0.56, 0.60, b_alpha);
+        sh.color = Color::srgba(0.0, 0.0, 0.0, b_alpha);
     }
     let t_alpha = (toast.timer * 2.0).min(1.0);
-    for (mut txt, mut col) in &mut q.toast {
+    for (mut txt, mut col, mut sh) in &mut q.toast {
         txt.0 = toast.text.clone();
         let lin = toast.color.to_srgba();
         col.0 = Color::srgba(lin.red, lin.green, lin.blue, t_alpha);
+        sh.color = Color::srgba(0.0, 0.0, 0.0, t_alpha);
     }
 
     if !show_hud {
