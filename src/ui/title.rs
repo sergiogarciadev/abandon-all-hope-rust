@@ -136,15 +136,15 @@ pub struct DeathBtn(pub usize); // 0 = Try Again, 1 = Title
 
 fn make_grain_image() -> Image {
     let mut rng = rand::rng();
-    let mut data = Vec::with_capacity(128 * 128 * 4);
-    for _ in 0..(128 * 128) {
+    let mut data = Vec::with_capacity(256 * 256 * 4);
+    for _ in 0..(256 * 256) {
         let v: u8 = rng.random_range(0..=255);
-        data.extend_from_slice(&[v, v, v, 14]);
+        data.extend_from_slice(&[v, v, v, 8]);
     }
     let mut img = Image::new(
         Extent3d {
-            width: 128,
-            height: 128,
+            width: 256,
+            height: 256,
             depth_or_array_layers: 1,
         },
         TextureDimension::D2,
@@ -302,20 +302,6 @@ pub fn setup_title_ui(mut commands: Commands, mut images: ResMut<Assets<Image>>)
         BackgroundColor(Color::BLACK),
     ));
 
-    // Film grain overlay
-    commands.spawn((
-        GrainOverlay,
-        Pickable::IGNORE,
-        GlobalZIndex(40),
-        ImageNode::new(grain_handle),
-        Node {
-            position_type: PositionType::Absolute,
-            width: Val::Percent(100.0),
-            height: Val::Percent(100.0),
-            ..default()
-        },
-    ));
-
     // Title Screen Root
     commands
         .spawn((
@@ -323,12 +309,36 @@ pub fn setup_title_ui(mut commands: Commands, mut images: ResMut<Assets<Image>>)
             GlobalZIndex(12),
             Node {
                 position_type: PositionType::Absolute,
+                left: Val::Px(0.0),
+                top: Val::Px(0.0),
                 width: Val::Percent(100.0),
                 height: Val::Percent(100.0),
                 ..default()
             },
         ))
         .with_children(|root| {
+            // Subtle tiled film grain over the title screen only
+            root.spawn((
+                GrainOverlay,
+                Pickable::IGNORE,
+                ImageNode {
+                    image: grain_handle,
+                    image_mode: NodeImageMode::Tiled {
+                        tile_x: true,
+                        tile_y: true,
+                        stretch_value: 1.0,
+                    },
+                    ..default()
+                },
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(0.0),
+                    top: Val::Px(0.0),
+                    width: Val::Percent(100.0),
+                    height: Val::Percent(100.0),
+                    ..default()
+                },
+            ));
             // Left dark scrim
             root.spawn((
                 Pickable::IGNORE,
