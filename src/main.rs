@@ -1,8 +1,11 @@
 mod core;
+mod entities;
 mod world;
 
 use bevy::prelude::*;
 
+use entities::player::setup_player;
+use entities::zombies::setup_zombie_assets;
 use world::openings::Openings;
 use world::solids::SolidsNav;
 use world::world::{WallBoxes, WorldWeatherLevel, setup_world, update_world};
@@ -35,7 +38,7 @@ fn main() {
             ..default()
         }))
         .init_state::<GameState>()
-        .add_systems(Startup, (setup_basic_camera, setup_world))
+        .add_systems(Startup, (setup_basic_camera, setup_world, setup_player, setup_zombie_assets))
         .add_systems(Update, update_world)
         .run();
 }
