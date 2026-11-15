@@ -809,11 +809,14 @@ pub fn update_title_ui(
     mut ctx: ResetContext,
     mut transforms: Query<&mut Transform>,
     mut mats: Query<&mut MeshMaterial3d<StandardMaterial>>,
-    mut visibilities: Query<&mut Visibility>,
-    mut q: TitleUiQueries,
+    mut p: ParamSet<(TitleUiQueries, Query<&mut Visibility>)>,
 ) {
     let dt = time.delta_secs();
     let elapsed = time.elapsed_secs();
+    let mut start_run = false;
+
+    {
+        let mut q = p.p0();
 
     // Startup fade-in
     if ui_state.fade_timer > 0.0 {
@@ -964,16 +967,7 @@ pub fn update_title_ui(
             0 => {
                 // Start Run!
                 ui_state.panel = TitlePanel::None;
-                clear_run_entities(
-                    &mut commands,
-                    &run_entities,
-                    &mut ctx,
-                    &mut transforms,
-                    &mut mats,
-                    &mut visibilities,
-                );
-                crate::game::start_wave(&mut ctx.stats, &mut ctx.weather, &ctx.audio, &mut ctx.banner);
-                next_state.set(GameState::Playing);
+                start_run = true;
             }
             1 => {
                 ui_state.panel = if ui_state.panel == TitlePanel::How {
@@ -1033,6 +1027,20 @@ pub fn update_title_ui(
     for mut txt in &mut q.shake_txt {
         txt.0 = if settings.shake { "ON".into() } else { "OFF".into() };
     }
+    }
+
+    if start_run {
+        clear_run_entities(
+            &mut commands,
+            &run_entities,
+            &mut ctx,
+            &mut transforms,
+            &mut mats,
+            &mut p.p1(),
+        );
+        crate::game::start_wave(&mut ctx.stats, &mut ctx.weather, &ctx.audio, &mut ctx.banner);
+        next_state.set(GameState::Playing);
+    }
 }
 
 #[derive(SystemParam)]
@@ -1058,92 +1066,93 @@ pub fn update_overlays(
     mut ctx: ResetContext,
     mut transforms: Query<&mut Transform>,
     mut mats: Query<&mut MeshMaterial3d<StandardMaterial>>,
-    mut visibilities: Query<&mut Visibility>,
-    mut q: OverlayQueries,
+    mut p: ParamSet<(OverlayQueries, Query<&mut Visibility>)>,
 ) {
     let paused = *state.get() == GameState::Paused;
     let dead = *state.get() == GameState::Dead;
+    let mut reset_to: Option<GameState> = None;
+    let mut start_new_wave = false;
 
-    for mut vis in &mut q.pause_root {
-        *vis = if paused {
-            Visibility::Inherited
-        } else {
-            Visibility::Hidden
-        };
-    }
-    for mut vis in &mut q.death_root {
-        *vis = if dead {
-            Visibility::Inherited
-        } else {
-            Visibility::Hidden
-        };
-    }
-
-    if paused {
-        for mut txt in &mut q.pause_stat {
-            txt.0 = format!("NIGHT {}  •  {} KILLS", ctx.stats.wave, ctx.stats.kills);
-        }
-        for (btn, inter) in &q.pause_btns {
-            #[allow(deprecated)]
-            if *inter == Interaction::Pressed {
-                ctx.audio.ui(UiSound::Select);
-                if btn.0 == 0 {
-                    next_state.set(GameState::Playing);
-                } else {
-                    clear_run_entities(
-                        &mut commands,
-                        &run_entities,
-                        &mut ctx,
-                        &mut transforms,
-                        &mut mats,
-                        &mut visibilities,
-                    );
-                    next_state.set(GameState::Title);
-                }
-            }
-        }
-    }
-
-    if dead {
-        let is_record = ctx.stats.wave > settings.best_wave
-            || (ctx.stats.wave == settings.best_wave && ctx.stats.kills > settings.best_kills);
-        if is_record {
-            settings.best_wave = ctx.stats.wave;
-            settings.best_kills = ctx.stats.kills;
-            save_storage(&settings);
-        }
-        for mut txt in &mut q.death_stat {
-            txt.0 = format!("NIGHT {}  •  {} KILLS", ctx.stats.wave, ctx.stats.kills);
-        }
-        for mut txt in &mut q.death_best {
-            txt.0 = if is_record {
-                "NEW RECORD".to_string()
-            } else if settings.best_wave > 0 {
-                format!("BEST: NIGHT {}  •  {} KILLS", settings.best_wave, settings.best_kills)
+    {
+        let mut q = p.p0();
+        for mut vis in &mut q.pause_root {
+            *vis = if paused {
+                Visibility::Inherited
             } else {
-                String::new()
+                Visibility::Hidden
             };
         }
-        for (btn, inter) in &q.death_btns {
-            #[allow(deprecated)]
-            if *inter == Interaction::Pressed {
-                ctx.audio.ui(UiSound::Select);
-                clear_run_entities(
-                    &mut commands,
-                    &run_entities,
-                    &mut ctx,
-                    &mut transforms,
-                    &mut mats,
-                    &mut visibilities,
-                );
-                if btn.0 == 0 {
-                    crate::game::start_wave(&mut ctx.stats, &mut ctx.weather, &ctx.audio, &mut ctx.banner);
-                    next_state.set(GameState::Playing);
-                } else {
-                    next_state.set(GameState::Title);
+        for mut vis in &mut q.death_root {
+            *vis = if dead {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            };
+        }
+
+        if paused {
+            for mut txt in &mut q.pause_stat {
+                txt.0 = format!("NIGHT {}  •  {} KILLS", ctx.stats.wave, ctx.stats.kills);
+            }
+            for (btn, inter) in &q.pause_btns {
+                if *inter == Interaction::Pressed {
+                    ctx.audio.ui(UiSound::Select);
+                    if btn.0 == 0 {
+                        next_state.set(GameState::Playing);
+                    } else {
+                        reset_to = Some(GameState::Title);
+                    }
                 }
             }
         }
+
+        if dead {
+            let is_record = ctx.stats.wave > settings.best_wave
+                || (ctx.stats.wave == settings.best_wave && ctx.stats.kills > settings.best_kills);
+            if is_record {
+                settings.best_wave = ctx.stats.wave;
+                settings.best_kills = ctx.stats.kills;
+                save_storage(&settings);
+            }
+            for mut txt in &mut q.death_stat {
+                txt.0 = format!("NIGHT {}  •  {} KILLS", ctx.stats.wave, ctx.stats.kills);
+            }
+            for mut txt in &mut q.death_best {
+                txt.0 = if is_record {
+                    "NEW RECORD".to_string()
+                } else if settings.best_wave > 0 {
+                    format!("BEST: NIGHT {}  •  {} KILLS", settings.best_wave, settings.best_kills)
+                } else {
+                    String::new()
+                };
+            }
+            for (btn, inter) in &q.death_btns {
+                if *inter == Interaction::Pressed {
+                    ctx.audio.ui(UiSound::Select);
+                    if btn.0 == 0 {
+                        start_new_wave = true;
+                        reset_to = Some(GameState::Playing);
+                    } else {
+                        reset_to = Some(GameState::Title);
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(target_state) = reset_to {
+        clear_run_entities(
+            &mut commands,
+            &run_entities,
+            &mut ctx,
+            &mut transforms,
+            &mut mats,
+            &mut p.p1(),
+        );
+        if start_new_wave {
+            crate::game::start_wave(&mut ctx.stats, &mut ctx.weather, &ctx.audio, &mut ctx.banner);
+        }
+        next_state.set(target_state);
     }
 }
 
