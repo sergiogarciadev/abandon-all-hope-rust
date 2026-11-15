@@ -82,6 +82,15 @@ impl AudioEngine {
         self.send(AudioCmd::SetPaused(paused));
     }
 
+    pub fn apply_volume(&self, master: u8, sfx: u8, music: u8) {
+        let sq = |v: u8| (v as f32 / 8.0).powi(2);
+        self.send(AudioCmd::SetVolume {
+            master: sq(master),
+            sfx: sq(sfx),
+            music: sq(music),
+        });
+    }
+
     pub fn shot(&self, hot: bool, spread: bool) {
         self.play(VoiceSpec {
             waveform: Waveform::Pulse25,

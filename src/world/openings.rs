@@ -85,6 +85,47 @@ pub struct Openings {
     pub glass_cracked: Handle<StandardMaterial>,
 }
 
+impl Openings {
+    pub fn reset(
+        &mut self,
+        mats: &mut Query<&mut MeshMaterial3d<StandardMaterial>>,
+        visibilities: &mut Query<&mut Visibility>,
+    ) {
+        let clean = self.glass_mat.clone();
+        for o in &mut self.list {
+            o.hp = o.max_hp;
+            o.climber = None;
+            o.jolt = 0.0;
+            o.fall_t = -1.0;
+            if let Some(e) = o.fall_entity {
+                if let Ok(mut v) = visibilities.get_mut(e) {
+                    *v = Visibility::Inherited;
+                }
+            }
+            if let Some(e) = o.pane_entity {
+                if let Ok(mut v) = visibilities.get_mut(e) {
+                    *v = Visibility::Inherited;
+                }
+            }
+            if let Some(e) = o.bars_entity {
+                if let Ok(mut v) = visibilities.get_mut(e) {
+                    *v = Visibility::Inherited;
+                }
+            }
+            if let Some(e) = o.shards_entity {
+                if let Ok(mut v) = visibilities.get_mut(e) {
+                    *v = Visibility::Hidden;
+                }
+            }
+            if let Some(glass) = o.glass_entity {
+                if let Ok(mut m) = mats.get_mut(glass) {
+                    m.0 = clean.clone();
+                }
+            }
+        }
+    }
+}
+
 pub fn make_opening(axis: WallAxis, fixed: f32, u0: f32, u1: f32, kind: OpeningKind, wall_t: f32) -> Opening {
     let c = (u0 + u1) * 0.5;
     let s = fixed.signum();

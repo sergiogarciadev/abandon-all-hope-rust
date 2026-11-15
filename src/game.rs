@@ -3,7 +3,7 @@ use rand::RngExt;
 use std::f32::consts::TAU;
 
 use crate::audio::AudioEngine;
-use crate::core::state::{GameState, GameStats};
+use crate::core::state::{BannerState, GameState, GameStats};
 use crate::entities::player::PlayerRig;
 use crate::entities::zombies::{Corpse, Zombie, ZombieAssets, spawn_zombie};
 use crate::ui::upgrades::UpgradePicker;
@@ -12,7 +12,12 @@ use crate::world::world::EDGE;
 
 const MAX_ALIVE: usize = 30;
 
-pub fn start_wave(stats: &mut GameStats, weather: &mut WeatherState, audio: &AudioEngine) {
+pub fn start_wave(
+    stats: &mut GameStats,
+    weather: &mut WeatherState,
+    audio: &AudioEngine,
+    banner: &mut BannerState,
+) {
     stats.wave += 1;
     let n = stats.wave;
     stats.zombie_speed = (2.2 + (n - 1) as f32 * 0.2).min(5.2);
@@ -22,16 +27,13 @@ pub fn start_wave(stats: &mut GameStats, weather: &mut WeatherState, audio: &Aud
     stats.intermission = 0.0;
     weather.target = storm_for(n);
     audio.wave_start(n);
-}
-
-pub fn start_first_wave(
-    mut stats: ResMut<GameStats>,
-    mut weather: ResMut<WeatherState>,
-    audio: Res<AudioEngine>,
-) {
-    *stats = GameStats::default();
-    weather.set(0.0);
-    start_wave(&mut stats, &mut weather, &audio);
+    banner.title = format!("NIGHT {n}");
+    banner.sub = if n == 1 {
+        "HOLD THE CABIN".to_string()
+    } else {
+        format!("{} INCOMING", stats.to_spawn)
+    };
+    banner.timer = 1.6;
 }
 
 fn spawn_point(player_pos: Vec3) -> Vec3 {
@@ -58,6 +60,7 @@ pub fn wave_spawner(
     mut stats: ResMut<GameStats>,
     mut weather: ResMut<WeatherState>,
     mut picker: ResMut<UpgradePicker>,
+    mut banner: ResMut<BannerState>,
     mut next_state: ResMut<NextState<GameState>>,
     audio: Res<AudioEngine>,
     zombie_assets: Res<ZombieAssets>,
@@ -77,7 +80,7 @@ pub fn wave_spawner(
             stats.hp = (stats.hp + 1).min(stats.max_hp);
             picker.open(&stats);
             if picker.choices.is_empty() {
-                start_wave(&mut stats, &mut weather, &audio);
+                start_wave(&mut stats, &mut weather, &audio, &mut banner);
             } else {
                 next_state.set(GameState::ChoosingUpgrade);
             }

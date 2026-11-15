@@ -5,7 +5,7 @@ use std::f32::consts::{PI, TAU};
 use crate::audio::AudioEngine;
 use crate::core::blocks::{BlockSpec, bake_blocks};
 use crate::core::math::{SeededRng, damp, ease, wrap_a};
-use crate::core::state::GameStats;
+use crate::core::state::{DamageFlash, GameStats};
 use crate::effects::debris::DebrisAssets;
 use crate::world::openings::{
     CLIMB_TIME, OpeningKind, Openings, hit_opening, nearest_opening, shut_at,
@@ -989,7 +989,7 @@ fn face_toward(z: &mut Zombie, tf: &mut Transform, dx: f32, dz: f32, rate: f32, 
     d_a.abs() - d_a.abs().min(step)
 }
 
-fn walk_toward(z: &mut Zombie, tf: &mut Transform, dx: f32, dz: f32, speed: f32, turn: f32, dt: f32) {
+pub fn walk_toward(z: &mut Zombie, tf: &mut Transform, dx: f32, dz: f32, speed: f32, turn: f32, dt: f32) {
     let off = face_toward(z, tf, dx, dz, turn, dt);
     let v = speed * off.min(PI * 0.5).cos().max(0.15);
     tf.translation.x += z.heading.sin() * v * dt;
@@ -1001,6 +1001,7 @@ pub fn chase_zombies(
     time: Res<Time>,
     rig: Res<PlayerRig>,
     mut stats: ResMut<GameStats>,
+    mut flash: ResMut<DamageFlash>,
     solids: Res<SolidsNav>,
     wall_boxes: Res<WallBoxes>,
     mut openings: ResMut<Openings>,
@@ -1103,6 +1104,7 @@ pub fn chase_zombies(
                         stats.hp -= 1;
                         stats.dmg_cd = HURT_IFRAMES;
                         stats.shake = stats.shake.max(0.45);
+                        flash.alpha = 1.0;
                         audio.hurt();
                     }
                 }

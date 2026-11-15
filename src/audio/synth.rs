@@ -316,6 +316,7 @@ pub enum AudioCmd {
     HurtMuffle,
     SetMuted(bool),
     SetPaused(bool),
+    SetVolume { master: f32, sfx: f32, music: f32 },
 }
 
 pub struct ChipMixer {
@@ -324,6 +325,9 @@ pub struct ChipMixer {
     music: MusicSequencer,
     muted: bool,
     paused: bool,
+    master_vol: f32,
+    sfx_vol: f32,
+    music_vol: f32,
     weather_level: f32,
     weather_gust: f32,
     wind_lfo_phase: f32,
@@ -351,6 +355,9 @@ impl ChipMixer {
             music: MusicSequencer::new(),
             muted: false,
             paused: false,
+            master_vol: 1.0,
+            sfx_vol: 1.0,
+            music_vol: 1.0,
             weather_level: 0.0,
             weather_gust: 1.0,
             wind_lfo_phase: 0.0,
@@ -405,6 +412,11 @@ impl ChipMixer {
                 }
                 AudioCmd::SetMuted(m) => self.muted = m,
                 AudioCmd::SetPaused(p) => self.paused = p,
+                AudioCmd::SetVolume { master, sfx, music } => {
+                    self.master_vol = master;
+                    self.sfx_vol = sfx;
+                    self.music_vol = music;
+                }
             }
         }
     }
@@ -462,13 +474,13 @@ impl ChipMixer {
             let pan = self.voices[i].spec.pan.clamp(-0.9, 0.9);
             let gain_l = (0.5 * (1.0 - pan)).sqrt();
             let gain_r = (0.5 * (1.0 + pan)).sqrt();
-            let duck = if self.voices[i].spec.is_music {
-                self.duck_gain
+            let bus_gain = if self.voices[i].spec.is_music {
+                self.duck_gain * self.music_vol
             } else {
-                1.0
+                self.sfx_vol
             };
-            let sl = s * gain_l * duck;
-            let sr = s * gain_r * duck;
+            let sl = s * gain_l * bus_gain;
+            let sr = s * gain_r * bus_gain;
             if self.voices[i].spec.post_muffle {
                 post_l += sl;
                 post_r += sr;
@@ -501,8 +513,8 @@ impl ChipMixer {
         self.delay_r[self.delay_idx] = (wet_r + dl * 0.28).clamp(-1.5, 1.5);
         self.delay_idx = (self.delay_idx + 1) % DELAY_SAMPLES;
 
-        let mix_l = self.muffle_lp_l.process(dry_l + dl * 0.45) + post_l;
-        let mix_r = self.muffle_lp_r.process(dry_r + dr * 0.45) + post_r;
+        let mix_l = (self.muffle_lp_l.process(dry_l + dl * 0.45) + post_l) * self.master_vol;
+        let mix_r = (self.muffle_lp_r.process(dry_r + dr * 0.45) + post_r) * self.master_vol;
 
         self.sample_counter += 1;
         ((mix_l * 0.9).tanh(), (mix_r * 0.9).tanh())

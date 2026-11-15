@@ -2,10 +2,9 @@ use bevy::prelude::*;
 use std::collections::HashMap;
 
 #[derive(States, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[allow(dead_code)]
 pub enum GameState {
-    Title,
     #[default]
+    Title,
     Playing,
     ChoosingUpgrade,
     Paused,
@@ -86,9 +85,38 @@ pub struct AimState {
 }
 
 #[derive(Resource, Default)]
-#[allow(dead_code)]
 pub struct ToastState {
     pub text: String,
     pub color: Color,
     pub timer: f32,
+}
+
+#[derive(Resource, Default)]
+pub struct DamageFlash {
+    pub alpha: f32,
+}
+
+#[derive(Resource, Default)]
+pub struct BannerState {
+    pub title: String,
+    pub sub: String,
+    pub timer: f32,
+}
+
+#[derive(Resource)]
+pub struct CameraTransition {
+    /// 0.0 = Title camera, 1.0 = Gameplay follow camera
+    pub mix: f32,
+    pub title_t: f32,
+    pub follow_pos: Vec3,
+}
+
+impl Default for CameraTransition {
+    fn default() -> Self {
+        Self {
+            mix: 0.0,
+            title_t: 0.0,
+            follow_pos: Vec3::new(0.0, 30.0, 13.0),
+        }
+    }
 }

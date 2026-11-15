@@ -7,36 +7,41 @@ mod ui;
 mod world;
 
 use bevy::prelude::*;
-use rand::RngExt;
 
 use audio::{setup_audio, sync_audio_state};
-
-use core::state::{AimState, GameState, GameStats, ToastState};
+use core::state::{
+    AimState, BannerState, CameraTransition, DamageFlash, GameState, GameStats, ToastState,
+};
 use effects::blood::{setup_blood_assets, update_blood_particles};
 use effects::debris::{setup_debris_assets, update_debris};
 use entities::drops::{setup_drop_assets, update_drops};
 use entities::player::{
-    PlayerRig, PlayerRigState, animate_player, player_movement_and_aim, setup_player,
+    PlayerRigState, animate_player, player_movement_and_aim, setup_player,
 };
 use entities::weapon::{setup_bullet_assets, update_bullets, weapon_input_and_fire};
 use entities::zombies::{chase_zombies, separate_zombies, setup_zombie_assets, update_corpses};
-use game::{check_player_death, pause_toggle, start_first_wave, wave_spawner};
+use game::{check_player_death, pause_toggle, wave_spawner};
+use ui::hud::{setup_hud, update_hud};
+use ui::storage::load_storage;
+use ui::title::{
+    TitleUiState, setup_title_ui, spawn_title_zombies, update_camera_with_title, update_overlays,
+    update_title_ui, wander_title_zombies,
+};
 use ui::upgrades::{
-    UpgradePicker, despawn_temp_upgrade_ui, spawn_temp_upgrade_ui, update_upgrade_picker_timer,
+    UpgradePicker, despawn_upgrade_picker, setup_upgrade_icons, spawn_upgrade_picker,
+    update_upgrade_picker_timer,
 };
 use world::openings::{Openings, update_openings};
 use world::solids::SolidsNav;
 use world::weather::{setup_weather, update_weather};
 use world::world::{WallBoxes, WorldWeatherLevel, setup_world, update_world};
 
-const CAM_OFFSET: Vec3 = Vec3::new(0.0, 30.0, 13.0);
-
-#[derive(Component)]
-struct MainCamera;
-
 fn main() {
+    let loaded_settings = load_storage();
+
     App::new()
         .insert_resource(ClearColor(Color::srgb_u8(0x05, 0x06, 0x0a)))
+        .insert_resource(loaded_settings)
         .init_resource::<SolidsNav>()
         .init_resource::<WallBoxes>()
         .init_resource::<Openings>()
@@ -45,7 +50,11 @@ fn main() {
         .init_resource::<GameStats>()
         .init_resource::<AimState>()
         .init_resource::<ToastState>()
+        .init_resource::<DamageFlash>()
+        .init_resource::<BannerState>()
+        .init_resource::<CameraTransition>()
         .init_resource::<UpgradePicker>()
+        .init_resource::<TitleUiState>()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "ABANDON ALL HOPE".into(),
@@ -55,8 +64,9 @@ fn main() {
             ..default()
         }))
         .init_state::<GameState>()
-        .add_systems(OnEnter(GameState::ChoosingUpgrade), spawn_temp_upgrade_ui)
-        .add_systems(OnExit(GameState::ChoosingUpgrade), despawn_temp_upgrade_ui)
+        .add_systems(OnEnter(GameState::Title), spawn_title_zombies)
+        .add_systems(OnEnter(GameState::ChoosingUpgrade), spawn_upgrade_picker)
+        .add_systems(OnExit(GameState::ChoosingUpgrade), despawn_upgrade_picker)
         .add_systems(
             Startup,
             (
@@ -70,7 +80,10 @@ fn main() {
                 setup_debris_assets,
                 setup_drop_assets,
                 setup_weather,
-                start_first_wave.after(setup_weather).after(setup_audio),
+                setup_hud,
+                setup_upgrade_icons,
+                setup_title_ui,
+                spawn_title_zombies.after(setup_zombie_assets),
             ),
         )
         .add_systems(
@@ -80,7 +93,11 @@ fn main() {
                 sync_audio_state,
                 update_world,
                 update_weather,
-                update_camera,
+                update_camera_with_title,
+                update_hud,
+                update_title_ui,
+                update_overlays,
+                wander_title_zombies.run_if(in_state(GameState::Title)),
                 update_upgrade_picker_timer.run_if(in_state(GameState::ChoosingUpgrade)),
                 (
                     (
@@ -104,13 +121,11 @@ fn main() {
         .run();
 }
 
-/// Spawns the initial overhead 3D camera at the `CAM_OFFSET` from `js/src/core/scene.js`.
 fn setup_basic_camera(mut commands: Commands) {
     commands.spawn((
         Camera3d::default(),
-        MainCamera,
         Projection::Perspective(PerspectiveProjection {
-            fov: 55.0_f32.to_radians(),
+            fov: 42.0_f32.to_radians(),
             near: 0.1,
             far: 200.0,
             ..default()
@@ -123,33 +138,6 @@ fn setup_basic_camera(mut commands: Commands) {
             },
             ..default()
         },
-        Transform::from_translation(CAM_OFFSET).looking_at(Vec3::ZERO, Vec3::Y),
+        Transform::from_xyz(2.0, 2.0, 24.0).looking_at(Vec3::new(-1.5, 2.2, 8.0), Vec3::Y),
     ));
-}
-
-fn update_camera(
-    time: Res<Time>,
-    rig: Res<PlayerRig>,
-    mut stats: ResMut<GameStats>,
-    mut cam_q: Query<&mut Transform, With<MainCamera>>,
-    player_q: Query<&Transform, Without<MainCamera>>,
-) {
-    let dt = time.delta_secs();
-    stats.shake = (stats.shake - dt * 1.4).max(0.0);
-    let p_pos = player_q
-        .get(rig.root)
-        .map(|t| t.translation)
-        .unwrap_or(Vec3::ZERO);
-    let mut rng = rand::rng();
-    let s = stats.shake * stats.shake * 0.45;
-    let shake_off = Vec3::new(
-        (rng.random::<f32>() - 0.5) * 2.0 * s,
-        0.0,
-        (rng.random::<f32>() - 0.5) * 2.0 * s,
-    );
-    if let Ok(mut cam_tf) = cam_q.single_mut() {
-        let target = Vec3::new(p_pos.x, 0.0, p_pos.z);
-        *cam_tf = Transform::from_translation(target + CAM_OFFSET + shake_off)
-            .looking_at(target, Vec3::Y);
-    }
 }
