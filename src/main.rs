@@ -1,4 +1,11 @@
+mod core;
+mod world;
+
 use bevy::prelude::*;
+
+use world::openings::Openings;
+use world::solids::SolidsNav;
+use world::world::{WallBoxes, WorldWeatherLevel, setup_world, update_world};
 
 /// High-level game flow states, matching the JS state machine.
 #[derive(States, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -15,6 +22,10 @@ enum GameState {
 fn main() {
     App::new()
         .insert_resource(ClearColor(Color::srgb_u8(0x05, 0x06, 0x0a)))
+        .init_resource::<SolidsNav>()
+        .init_resource::<WallBoxes>()
+        .init_resource::<Openings>()
+        .init_resource::<WorldWeatherLevel>()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "ABANDON ALL HOPE".into(),
@@ -24,7 +35,8 @@ fn main() {
             ..default()
         }))
         .init_state::<GameState>()
-        .add_systems(Startup, setup_basic_camera)
+        .add_systems(Startup, (setup_basic_camera, setup_world))
+        .add_systems(Update, update_world)
         .run();
 }
 
@@ -38,6 +50,14 @@ fn setup_basic_camera(mut commands: Commands) {
             far: 200.0,
             ..default()
         }),
+        DistanceFog {
+            color: Color::srgb_u8(0x05, 0x06, 0x0a),
+            falloff: FogFalloff::Linear {
+                start: 32.0,
+                end: 62.0,
+            },
+            ..default()
+        },
         Transform::from_xyz(0.0, 30.0, 13.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 }
