@@ -13,7 +13,9 @@ use entities::player::{
     PlayerRig, PlayerRigState, animate_player, player_movement_and_aim, setup_player,
 };
 use entities::weapon::{setup_bullet_assets, update_bullets, weapon_input_and_fire};
-use entities::zombies::{animate_preview_zombies, setup_zombie_assets};
+use entities::zombies::{
+    chase_zombies, separate_zombies, setup_zombie_assets, update_corpses,
+};
 use world::openings::{Openings, update_openings};
 use world::solids::SolidsNav;
 use world::world::{WallBoxes, WorldWeatherLevel, setup_world, update_world};
@@ -77,7 +79,7 @@ fn main() {
                     update_bullets,
                 )
                     .chain(),
-                animate_preview_zombies,
+                (chase_zombies, separate_zombies, update_corpses).chain(),
                 update_openings,
                 update_debris,
                 update_blood_particles,

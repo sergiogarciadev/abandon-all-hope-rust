@@ -49,7 +49,6 @@ impl SolidsNav {
         });
     }
 
-    #[allow(dead_code)]
     pub fn push_out(&self, pos: &mut Vec2) {
         for b in &self.solids {
             let (lx, lz) = b.to_local(pos.x, pos.y);
@@ -113,6 +112,81 @@ impl SolidsNav {
             }
         }
     }
+
+    /// Returns the next waypoint toward `(tx, tz)`, routing around `SolidBox`es via Dijkstra.
+    pub fn route_around(&self, pos: Vec2, tx: f32, tz: f32, via: &mut Option<usize>) -> Vec2 {
+        let mut from = pos;
+        self.push_out(&mut from);
+        if self.clear_path(from.x, from.y, tx, tz) {
+            *via = None;
+            return Vec2::new(tx, tz);
+        }
+
+        let n = self.round_nodes.len();
+        if n == 0 {
+            return Vec2::new(tx, tz);
+        }
+
+        let mut dist = vec![f32::INFINITY; n];
+        let mut done = vec![false; n];
+        for i in 0..n {
+            let k = self.round_nodes[i];
+            if self.clear_path(k.x, k.y, tx, tz) {
+                dist[i] = k.distance(Vec2::new(tx, tz));
+            }
+        }
+
+        for _ in 0..n {
+            let mut u = None;
+            for i in 0..n {
+                if !done[i] && u.map_or(true, |best| dist[i] < dist[best]) {
+                    u = Some(i);
+                }
+            }
+            let Some(u) = u else { break };
+            if dist[u].is_infinite() {
+                break;
+            }
+            done[u] = true;
+            for i in 0..n {
+                let cand = dist[u] + self.node_links[u][i];
+                if cand < dist[i] {
+                    dist[i] = cand;
+                }
+            }
+        }
+
+        let mut best = None;
+        let mut best_cost = f32::INFINITY;
+        let mut near = None;
+        let mut near_d = f32::INFINITY;
+
+        for i in 0..n {
+            let k = self.round_nodes[i];
+            let d = k.distance(from);
+            if d < 0.45 || !self.clear_path(from.x, from.y, k.x, k.y) {
+                continue;
+            }
+            if d < near_d {
+                near_d = d;
+                near = Some(i);
+            }
+            let loyalty = if *via == Some(i) { 1.0 } else { 0.0 };
+            let cost = d + dist[i] - loyalty;
+            if cost < best_cost {
+                best_cost = cost;
+                best = Some(i);
+            }
+        }
+
+        let pick = best.or(near);
+        if let Some(idx) = pick {
+            *via = Some(idx);
+            self.round_nodes[idx]
+        } else {
+            Vec2::new(tx, tz)
+        }
+    }
 }
 
 pub fn seg_hits_box(ax: f32, az: f32, bx: f32, bz: f32, hx: f32, hz: f32) -> bool {
@@ -143,7 +217,6 @@ pub fn seg_hits_box(ax: f32, az: f32, bx: f32, bz: f32, hx: f32, hz: f32) -> boo
     t0 < t1
 }
 
-#[allow(dead_code)]
 pub fn inside_cabin(pos: Vec3, half: f32) -> bool {
     pos.x.abs() < half - 0.3 && pos.z.abs() < half - 0.3
 }

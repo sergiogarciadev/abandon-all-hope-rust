@@ -1,10 +1,19 @@
 use bevy::prelude::*;
+use rand::RngExt;
 use std::f32::consts::{PI, TAU};
 
 use crate::core::blocks::{BlockSpec, bake_blocks};
-use crate::core::math::{SeededRng, damp, ease};
+use crate::core::math::{SeededRng, damp, ease, wrap_a};
+use crate::core::state::GameStats;
+use crate::effects::debris::DebrisAssets;
+use crate::world::openings::{
+    CLIMB_TIME, OpeningKind, Openings, hit_opening, nearest_opening, shut_at,
+};
+use crate::world::solids::{SolidsNav, inside_cabin};
+use crate::world::world::{HALF, WallBoxes};
 
 use super::animation::{bone_transform, foot_cycle, ik2};
+use super::player::PlayerRig;
 
 pub const Z_THIGH: f32 = 0.42;
 pub const Z_SHIN: f32 = 0.4;
@@ -14,8 +23,18 @@ pub const Z_UPPER_ARM: f32 = 0.4;
 pub const Z_FOREARM: f32 = 0.39;
 pub const Z_SCALE: f32 = 1.08;
 pub const Z_UPPER: f32 = 1.1;
-const Z_SWING: f32 = 0.65;
-const Z_STRIKE: f32 = 0.25;
+const Z_SWING: f32 = 0.85;
+const Z_STRIKE: f32 = 0.2;
+const Z_REACH: f32 = 1.2;
+const Z_LET_GO: f32 = 1.5;
+const Z_CLOSE: f32 = 0.95;
+const Z_SPACE: f32 = 0.8;
+const Z_HIT_RANGE: f32 = 1.65;
+const Z_TRACK: f32 = 7.0;
+pub const HURT_IFRAMES: f32 = 1.5;
+const CORPSE_LIFE: f32 = 20.0;
+const MAX_CORPSES: usize = 120;
+const BODY_THICK: f32 = 0.3;
 const Z_POLE_KNEE: Vec3 = Vec3::Z;
 
 pub struct ZombieLimb {
@@ -34,6 +53,36 @@ pub struct Zombie {
     pub hp: f32,
     pub hurt: f32,
     pub body: Vec<Entity>,
+    pub eyes: Entity,
+    #[allow(dead_code)]
+    pub pace: f32,
+    pub swing_cd: f32,
+    pub struck: bool,
+    pub standing: bool,
+    pub swing_at: Option<usize>,
+    pub via: Option<usize>,
+    pub stuck_t: f32,
+    pub stuck_x: f32,
+    pub stuck_z: f32,
+    pub opening: Option<usize>,
+    pub stage: u8,
+    pub heading: f32,
+    pub turn: f32,
+    pub climb_o: Option<usize>,
+    pub climb_from: Vec3,
+}
+
+#[derive(Component)]
+pub struct Corpse {
+    pub dead_t: f32,
+    pub rest_y: f32,
+    pub points: [(f32, f32); 3],
+    pub under: Vec<Entity>,
+    pub sinking: bool,
+    pub sink_t: f32,
+    pub pool: Entity,
+    pub pool_size: f32,
+    pub fall_dir: f32,
 }
 
 #[derive(Component)]
@@ -146,13 +195,13 @@ pub struct ZombieKit {
 }
 
 #[derive(Resource)]
-#[allow(dead_code)]
 pub struct ZombieAssets {
     pub kits: Vec<ZombieKit>,
     pub skin_mat: Handle<StandardMaterial>,
     pub hurt_mat: Handle<StandardMaterial>,
     pub eyes_mat: Handle<StandardMaterial>,
     pub blood_pool_mat: Handle<StandardMaterial>,
+    pub pool_mesh: Handle<Mesh>,
 }
 
 fn bake_zombie(l: &ZombieLook, seed: u32, meshes: &mut Assets<Mesh>) -> ZombieKit {
@@ -290,13 +339,25 @@ fn bake_zombie(l: &ZombieLook, seed: u32, meshes: &mut Assets<Mesh>) -> ZombieKi
     }
 }
 
-pub fn spawn_zombie_preview(commands: &mut Commands, assets: &ZombieAssets, kind: usize, pos: Vec3) {
+pub fn spawn_zombie(
+    commands: &mut Commands,
+    assets: &ZombieAssets,
+    kind: usize,
+    pos: Vec3,
+    hp: f32,
+    base_speed: f32,
+) -> Entity {
     let k = &assets.kits[kind % assets.kits.len()];
-    let mut rng = SeededRng::new(100 + kind as u32 * 37);
+    let mut rng = rand::rng();
+    let heading = (-pos.x).atan2(-pos.z);
+    let scale = Z_SCALE * (0.94 + rng.random::<f32>() * 0.12);
+    let pace = 0.85 + rng.random::<f32>() * 0.3;
 
     let root = commands
         .spawn((
-            Transform::from_translation(pos).with_scale(Vec3::splat(Z_SCALE)),
+            Transform::from_translation(pos)
+                .with_rotation(Quat::from_rotation_y(heading))
+                .with_scale(Vec3::splat(scale)),
             Visibility::default(),
         ))
         .id();
@@ -404,35 +465,63 @@ pub fn spawn_zombie_preview(commands: &mut Commands, assets: &ZombieAssets, kind
         body.extend_from_slice(&[l.thigh, l.shin, l.foot, l.upper_arm, l.forearm]);
     }
 
+    let mut rng = rand::rng();
     commands.entity(root).insert((
         Zombie {
-            hp: 2.0,
+            hp,
             hurt: 0.0,
             body,
+            eyes,
+            pace,
+            swing_cd: 0.15,
+            struck: false,
+            standing: false,
+            swing_at: None,
+            via: None,
+            stuck_t: 0.0,
+            stuck_x: pos.x,
+            stuck_z: pos.z,
+            opening: None,
+            stage: 0,
+            heading,
+            turn: 3.0 + rng.random::<f32>() * 2.0,
+            climb_o: None,
+            climb_from: Vec3::ZERO,
         },
         ZombieAnim {
-        pelvis,
-        upper,
-        head,
-        jaw,
-        limbs,
-        phase: rng.next_f32(),
-        seed: rng.next_f32() * 100.0,
-        limp: if rng.next_f32() < 0.45 { 0.5 + rng.next_f32() * 0.5 } else { 0.0 },
-        limp_side: if rng.next_f32() < 0.5 { 1.0 } else { -1.0 },
-        hunch: 0.25 + rng.next_f32() * 0.3,
-        tilt: (rng.next_f32() - 0.5) * 0.5,
-        arms: if rng.next_f32() < 0.7 { 2 } else if rng.next_f32() < 0.85 { 1 } else { 0 },
-        flinch: 0.0,
-        attack: 0.0,
-        groan: 0.0,
-        gait: 1.0,
-        speed: 2.2 * (0.85 + rng.next_f32() * 0.3),
-        swing: -1.0,
-        climb: -1.0,
-        fall_dir: 1.0,
-    },
+            pelvis,
+            upper,
+            head,
+            jaw,
+            limbs,
+            phase: rng.random::<f32>(),
+            seed: rng.random::<f32>() * 100.0,
+            limp: if rng.random::<f32>() < 0.45 {
+                0.5 + rng.random::<f32>() * 0.5
+            } else {
+                0.0
+            },
+            limp_side: if rng.random::<f32>() < 0.5 { 1.0 } else { -1.0 },
+            hunch: 0.25 + rng.random::<f32>() * 0.3,
+            tilt: (rng.random::<f32>() - 0.5) * 0.5,
+            arms: if rng.random::<f32>() < 0.7 {
+                2
+            } else if rng.random::<f32>() < 0.85 {
+                1
+            } else {
+                0
+            },
+            flinch: 0.0,
+            attack: 0.0,
+            groan: 0.0,
+            gait: 1.0,
+            speed: base_speed * pace,
+            swing: -1.0,
+            climb: -1.0,
+            fall_dir: 1.0,
+        },
     ));
+    root
 }
 
 pub fn pose_zombie_rig(
@@ -618,30 +707,6 @@ pub fn pose_zombie_rig(
     }
 }
 
-pub fn animate_preview_zombies(
-    time: Res<Time>,
-    assets: Res<ZombieAssets>,
-    mut zombies: Query<(&mut Zombie, &mut ZombieAnim)>,
-    mut transforms: Query<&mut Transform>,
-    mut mats: Query<&mut MeshMaterial3d<StandardMaterial>>,
-) {
-    let dt = time.delta_secs();
-    let elapsed = time.elapsed_secs();
-    for (mut z_state, mut anim) in &mut zombies {
-        if z_state.hurt > 0.0 {
-            z_state.hurt -= dt;
-            if z_state.hurt <= 0.0 {
-                for &m in &z_state.body {
-                    if let Ok(mut mat) = mats.get_mut(m) {
-                        mat.0 = assets.skin_mat.clone();
-                    }
-                }
-            }
-        }
-        pose_zombie_rig(&mut anim, dt, elapsed, 5.0, 0.0, 0.0, &mut transforms);
-    }
-}
-
 pub fn setup_zombie_assets(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -674,23 +739,559 @@ pub fn setup_zombie_assets(
         ..default()
     });
 
+    let mut pool_rng = SeededRng::new(99);
+    let mut slabs = vec![
+        BlockSpec::new(0.8, 0.02, 0.8, 0.0, 0.0, 0.0, 0xffffff)
+            .with_rot(0.0, 0.3, 0.0)
+            .with_bevel(0.008),
+    ];
+    for i in 0..6 {
+        let a = i as f32 * 1.1 + pool_rng.next_f32();
+        let r = 0.3 + pool_rng.next_f32() * 0.25;
+        let s = 0.25 + pool_rng.next_f32() * 0.3;
+        slabs.push(
+            BlockSpec::new(
+                s,
+                0.02,
+                s * (0.6 + pool_rng.next_f32() * 0.6),
+                a.cos() * r,
+                0.003 * i as f32,
+                a.sin() * r,
+                0xffffff,
+            )
+            .with_rot(0.0, pool_rng.next_f32() * 3.0, 0.0)
+            .with_bevel(0.008),
+        );
+    }
+    let pool_mesh = meshes.add(bake_blocks(&slabs, &mut pool_rng, false));
+
     let assets = ZombieAssets {
         kits,
         skin_mat,
         hurt_mat,
         eyes_mat,
         blood_pool_mat,
+        pool_mesh,
     };
 
-    // Preview the 4 zombie archetypes outside the south door so we can inspect them in Step 3
-    for i in 0..4 {
-        spawn_zombie_preview(
-            &mut commands,
-            &assets,
-            i,
-            Vec3::new(-3.0 + i as f32 * 2.0, 0.0, 4.5),
-        );
+    // Spawn 4 test zombies outside the cabin (including behind the pickup truck) for Step 6 verification
+    for (i, pos) in [
+        Vec3::new(-9.0, 0.0, 18.0),
+        Vec3::new(0.0, 0.0, 16.0),
+        Vec3::new(14.0, 0.0, 2.5),
+        Vec3::new(-14.0, 0.0, -0.5),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        spawn_zombie(&mut commands, &assets, i, pos, 2.0, 2.2);
     }
 
     commands.insert_resource(assets);
+}
+
+pub fn zombie_dies(
+    z_ent: Entity,
+    z_tf: &Transform,
+    z: &mut Zombie,
+    anim: &mut ZombieAnim,
+    dir: Option<Vec3>,
+    player_pos: Vec3,
+    commands: &mut Commands,
+    assets: &ZombieAssets,
+    openings: &mut Openings,
+    corpses_q: &Query<(Entity, &Corpse)>,
+    mats: &mut Query<&mut MeshMaterial3d<StandardMaterial>>,
+    visibilities: &mut Query<&mut Visibility>,
+) {
+    if anim.climb >= 0.0 {
+        if let Some(o_idx) = z.climb_o {
+            let o = &mut openings.list[o_idx];
+            if o.climber == Some(z_ent) {
+                o.climber = None;
+            }
+        }
+        anim.climb = -1.0;
+        z.climb_o = None;
+    }
+
+    for &m in &z.body {
+        if let Ok(mut mat) = mats.get_mut(m) {
+            mat.0 = assets.skin_mat.clone();
+        }
+    }
+    if let Ok(mut vis) = visibilities.get_mut(z.eyes) {
+        *vis = Visibility::Hidden;
+    }
+
+    let (fx, fz) = if let Some(d) = dir {
+        (d.x, d.z)
+    } else {
+        (
+            z_tf.translation.x - player_pos.x,
+            z_tf.translation.z - player_pos.z,
+        )
+    };
+    let fall_dir = if fx * z.heading.sin() + fz * z.heading.cos() >= 0.0 {
+        1.0
+    } else {
+        -1.0
+    };
+    anim.fall_dir = fall_dir;
+
+    let dx = z.heading.sin() * fall_dir;
+    let dz = z.heading.cos() * fall_dir;
+    let s = z_tf.scale.x;
+    let points = [
+        (z_tf.translation.x + dx * 0.5 * s, z_tf.translation.z + dz * 0.5 * s),
+        (z_tf.translation.x + dx * 1.1 * s, z_tf.translation.z + dz * 1.1 * s),
+        (z_tf.translation.x + dx * 1.7 * s, z_tf.translation.z + dz * 1.7 * s),
+    ];
+
+    let mut rest_y = 0.0_f32;
+    let mut under = Vec::new();
+    for (c_ent, c) in corpses_q.iter() {
+        if c.sinking {
+            continue;
+        }
+        let overlaps = c.points.iter().any(|&(ax, az)| {
+            points
+                .iter()
+                .any(|&(bx, bz)| (ax - bx).powi(2) + (az - bz).powi(2) < 0.36)
+        });
+        if overlaps {
+            under.push(c_ent);
+            rest_y = rest_y.max(c.rest_y + BODY_THICK);
+        }
+    }
+    rest_y = rest_y.min(1.5);
+
+    let mut rng = rand::rng();
+    let pool_size = 1.1 + rng.random::<f32>() * 0.6;
+    let pool = commands
+        .spawn((
+            Mesh3d(assets.pool_mesh.clone()),
+            MeshMaterial3d(assets.blood_pool_mat.clone()),
+            Transform::from_xyz(
+                z_tf.translation.x + dx * 0.9,
+                0.045,
+                z_tf.translation.z + dz * 0.9,
+            )
+            .with_rotation(Quat::from_rotation_y(rng.random::<f32>() * PI))
+            .with_scale(Vec3::splat(0.05)),
+        ))
+        .id();
+
+    commands.entity(z_ent).remove::<Zombie>().insert(Corpse {
+        dead_t: 0.0,
+        rest_y,
+        points,
+        under,
+        sinking: false,
+        sink_t: 0.0,
+        pool,
+        pool_size,
+        fall_dir,
+    });
+}
+
+pub fn update_corpses(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut corpses: Query<(Entity, &mut Corpse, &mut ZombieAnim)>,
+    mut transforms: Query<&mut Transform>,
+) {
+    let dt = time.delta_secs();
+    let elapsed = time.elapsed_secs();
+    let total = corpses.iter().count();
+
+    let mut to_sink = Vec::new();
+    for (i, (ent, c, _)) in corpses.iter().enumerate() {
+        if !c.sinking && (c.dead_t > CORPSE_LIFE || total.saturating_sub(i) > MAX_CORPSES) {
+            to_sink.push(ent);
+        }
+    }
+    if !to_sink.is_empty() {
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for (ent, c, _) in corpses.iter() {
+                if !to_sink.contains(&ent) && c.under.iter().any(|u| to_sink.contains(u)) {
+                    to_sink.push(ent);
+                    changed = true;
+                }
+            }
+        }
+    }
+
+    for (ent, mut c, mut anim) in &mut corpses {
+        c.dead_t += dt;
+        if to_sink.contains(&ent) {
+            c.sinking = true;
+        }
+        if c.sinking {
+            c.sink_t += dt;
+            let dy = -c.sink_t * (0.6 + c.rest_y * 0.5);
+            if let Ok(mut tf) = transforms.get_mut(ent) {
+                tf.translation.y = (0.12 + c.rest_y) + dy;
+            }
+            if let Ok(mut p_tf) = transforms.get_mut(c.pool) {
+                p_tf.translation.y = 0.045 - c.sink_t * 0.04;
+            }
+            if dy < -1.1 - c.rest_y {
+                commands.entity(c.pool).despawn();
+                commands.entity(ent).despawn();
+            }
+            continue;
+        }
+
+        let crumple = (c.dead_t / 0.25).min(1.0);
+        let fall = ((c.dead_t - 0.1) / 0.45).clamp(0.0, 1.0);
+        pose_zombie_rig(
+            &mut anim,
+            dt,
+            elapsed,
+            99.0,
+            crumple,
+            crumple * (1.0 - 0.85 * fall),
+            &mut transforms,
+        );
+
+        let f = fall * fall;
+        let bounce = if fall >= 1.0 {
+            0.06 * (-(c.dead_t - 0.55) * 9.0).exp() * ((c.dead_t - 0.55) * 30.0).sin()
+        } else {
+            0.0
+        };
+        if let Ok(mut tf) = transforms.get_mut(ent) {
+            let (y, _, z_rot) = tf.rotation.to_euler(EulerRot::YXZ);
+            tf.rotation = Quat::from_euler(EulerRot::YXZ, y, c.fall_dir * (f * 1.42 - bounce), z_rot);
+            tf.translation.y = (0.12 + c.rest_y) * f;
+        }
+        if let Ok(mut p_tf) = transforms.get_mut(c.pool) {
+            let ps = ((c.dead_t - 0.4) / 1.4).clamp(0.05, 1.0) * c.pool_size;
+            p_tf.scale = Vec3::splat(ps);
+        }
+    }
+}
+
+fn wall_between(a: Vec3, b: Vec3, wall_boxes: &WallBoxes, openings: &Openings) -> bool {
+    for i in 1..4 {
+        let t = i as f32 / 4.0;
+        let x = a.x + (b.x - a.x) * t;
+        let z = a.z + (b.z - a.z) * t;
+        for w in &wall_boxes.boxes {
+            if x >= w.min_x && x <= w.max_x && z >= w.min_z && z <= w.max_z {
+                return true;
+            }
+        }
+        if shut_at(openings, x, z).is_some() {
+            return true;
+        }
+    }
+    false
+}
+
+fn face_toward(z: &mut Zombie, tf: &mut Transform, dx: f32, dz: f32, rate: f32, dt: f32) -> f32 {
+    let d_a = wrap_a(dx.atan2(dz) - z.heading);
+    let step = rate * dt;
+    z.heading += d_a.clamp(-step, step);
+    let (_, x_rot, z_rot) = tf.rotation.to_euler(EulerRot::YXZ);
+    tf.rotation = Quat::from_euler(EulerRot::YXZ, z.heading, x_rot, z_rot);
+    d_a.abs() - d_a.abs().min(step)
+}
+
+fn walk_toward(z: &mut Zombie, tf: &mut Transform, dx: f32, dz: f32, speed: f32, turn: f32, dt: f32) {
+    let off = face_toward(z, tf, dx, dz, turn, dt);
+    let v = speed * off.min(PI * 0.5).cos().max(0.15);
+    tf.translation.x += z.heading.sin() * v * dt;
+    tf.translation.z += z.heading.cos() * v * dt;
+}
+
+pub fn chase_zombies(
+    mut commands: Commands,
+    time: Res<Time>,
+    rig: Res<PlayerRig>,
+    mut stats: ResMut<GameStats>,
+    solids: Res<SolidsNav>,
+    wall_boxes: Res<WallBoxes>,
+    mut openings: ResMut<Openings>,
+    debris_assets: Res<DebrisAssets>,
+    zombie_assets: Res<ZombieAssets>,
+    mut zombies: Query<(Entity, &mut Zombie, &mut ZombieAnim)>,
+    mut transforms: Query<&mut Transform>,
+    mut mats: Query<&mut MeshMaterial3d<StandardMaterial>>,
+    mut visibilities: Query<&mut Visibility>,
+) {
+    let dt = time.delta_secs();
+    let elapsed = time.elapsed_secs();
+    stats.dmg_cd = (stats.dmg_cd - dt).max(0.0);
+
+    let p_pos = transforms
+        .get(rig.root)
+        .map(|t| t.translation)
+        .unwrap_or(Vec3::ZERO);
+
+    let mut rng = rand::rng();
+
+    for (z_ent, mut z, mut anim) in &mut zombies {
+        if z.hurt > 0.0 {
+            z.hurt -= dt;
+            if z.hurt <= 0.0 {
+                for &m in &z.body {
+                    if let Ok(mut mat) = mats.get_mut(m) {
+                        mat.0 = zombie_assets.skin_mat.clone();
+                    }
+                }
+            }
+        }
+
+        let Ok(mut z_tf) = transforms.get_mut(z_ent) else {
+            continue;
+        };
+        let pdx = p_pos.x - z_tf.translation.x;
+        let pdz = p_pos.z - z_tf.translation.z;
+        let pd = pdx.hypot(pdz);
+        let mut walking = false;
+
+        if anim.climb >= 0.0 {
+            if let Some(o_idx) = z.climb_o {
+                anim.climb = (anim.climb + dt / CLIMB_TIME).min(1.0);
+                let k = anim.climb;
+                let e = ease(k);
+                let o = &openings.list[o_idx];
+                z_tf.translation.x = z.climb_from.x + (o.lx - z.climb_from.x) * e;
+                z_tf.translation.z = z.climb_from.z + (o.lz - z.climb_from.z) * e;
+                z_tf.translation.y = (o.sill - 0.15) * ((PI * k).sin() * 1.4).min(1.0);
+                let (y, _, z_rot) = z_tf.rotation.to_euler(EulerRot::YXZ);
+                z_tf.rotation = Quat::from_euler(EulerRot::YXZ, y, 0.75 * (PI * k).sin(), z_rot);
+                if k >= 1.0 {
+                    let o = &mut openings.list[o_idx];
+                    if o.climber == Some(z_ent) {
+                        o.climber = None;
+                    }
+                    z_tf.translation = Vec3::new(o.lx, 0.0, o.lz);
+                    z_tf.rotation = Quat::from_rotation_y(z.heading);
+                    anim.climb = -1.0;
+                    z.climb_o = None;
+                    z.opening = None;
+                    z.stage = 0;
+                }
+            }
+        } else if anim.swing >= 0.0 {
+            anim.swing += dt;
+            if anim.swing < Z_STRIKE {
+                let (tx, tz) = if let Some(o_idx) = z.swing_at {
+                    let o = &openings.list[o_idx];
+                    (o.x - z_tf.translation.x, o.z - z_tf.translation.z)
+                } else {
+                    (pdx, pdz)
+                };
+                face_toward(&mut z, &mut z_tf, tx, tz, Z_TRACK, dt);
+            }
+            if !z.struck && anim.swing >= Z_STRIKE {
+                z.struck = true;
+                if let Some(o_idx) = z.swing_at {
+                    hit_opening(
+                        o_idx,
+                        &mut openings,
+                        &mut commands,
+                        &debris_assets,
+                        &mut mats,
+                        &mut visibilities,
+                    );
+                } else if pd < Z_HIT_RANGE
+                    && !wall_between(z_tf.translation, p_pos, &wall_boxes, &openings)
+                    && stats.dmg_cd <= 0.0
+                {
+                    stats.hp -= 1;
+                    stats.dmg_cd = HURT_IFRAMES;
+                    stats.shake = stats.shake.max(0.45);
+                }
+            }
+            if anim.swing >= Z_SWING {
+                anim.swing = -1.0;
+                z.swing_cd = 0.25 + rng.random::<f32>() * 0.35;
+            }
+        } else if pd < (if z.standing { Z_LET_GO } else { Z_REACH })
+            && !wall_between(z_tf.translation, p_pos, &wall_boxes, &openings)
+        {
+            if !z.standing {
+                z.swing_cd = 0.0;
+            }
+            z.standing = true;
+            let off = face_toward(&mut z, &mut z_tf, pdx, pdz, Z_TRACK, dt);
+            z.swing_cd -= dt;
+            if z.swing_cd <= 0.0 && off < 0.5 {
+                anim.swing = 0.0;
+                z.struck = false;
+                z.swing_at = None;
+            }
+        } else {
+            z.standing = false;
+            let mut target = Some((p_pos.x, p_pos.z));
+            if inside_cabin(z_tf.translation, HALF) {
+                z.opening = None;
+                z.stage = 0;
+            } else {
+                if z.opening.is_none() {
+                    z.opening = nearest_opening(&openings, z_tf.translation, None);
+                    z.stage = 0;
+                }
+                if let Some(o_idx) = z.opening {
+                    let (ox, oz, ix, iz, fx, fz, lx, lz, ox_w, oz_w, is_door, hp, has_climber) = {
+                        let o = &openings.list[o_idx];
+                        (
+                            o.ox,
+                            o.oz,
+                            o.ix,
+                            o.iz,
+                            o.fx,
+                            o.fz,
+                            o.lx,
+                            o.lz,
+                            o.x,
+                            o.z,
+                            o.kind == OpeningKind::Door,
+                            o.hp,
+                            o.climber.is_some(),
+                        )
+                    };
+                    if z.stage == 0 {
+                        target = Some((ox, oz));
+                        if (ox - z_tf.translation.x).powi(2) + (oz - z_tf.translation.z).powi(2)
+                            < 1.4
+                        {
+                            z.stage = 1;
+                        }
+                    }
+                    if z.stage == 1 {
+                        if is_door && hp <= 0 {
+                            target = Some((ix, iz));
+                        } else if (ox_w - z_tf.translation.x).powi(2)
+                            + (oz_w - z_tf.translation.z).powi(2)
+                            > 1.45 * 1.45
+                        {
+                            target = Some((fx, fz));
+                        } else {
+                            target = None;
+                            let dx = ox_w - z_tf.translation.x;
+                            let dz = oz_w - z_tf.translation.z;
+                            let off = face_toward(&mut z, &mut z_tf, dx, dz, Z_TRACK, dt);
+                            z.swing_cd -= dt;
+                            if hp > 0 {
+                                if z.swing_cd <= 0.0 && off < 0.5 {
+                                    anim.swing = 0.0;
+                                    z.struck = false;
+                                    z.swing_at = Some(o_idx);
+                                }
+                            } else if !has_climber {
+                                openings.list[o_idx].climber = Some(z_ent);
+                                anim.climb = 0.0;
+                                z.climb_o = Some(o_idx);
+                                z.climb_from = z_tf.translation;
+                                z.heading =
+                                    (lx - z_tf.translation.x).atan2(lz - z_tf.translation.z);
+                                z_tf.rotation = Quat::from_rotation_y(z.heading);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Some((tx, tz)) = target {
+                let g = solids.route_around(
+                    Vec2::new(z_tf.translation.x, z_tf.translation.z),
+                    tx,
+                    tz,
+                    &mut z.via,
+                );
+                let turn_rate = z.turn * if pd < 4.0 { 2.5 } else { 1.0 };
+                let dx = g.x - z_tf.translation.x;
+                let dz = g.y - z_tf.translation.z;
+                walk_toward(&mut z, &mut z_tf, dx, dz, anim.speed, turn_rate, dt);
+                walking = true;
+            }
+        }
+
+        if walking {
+            z.stuck_t += dt;
+            if z.stuck_t > 2.0 {
+                if (z_tf.translation.x - z.stuck_x).hypot(z_tf.translation.z - z.stuck_z) < 0.6
+                    && z.opening.is_some()
+                    && !inside_cabin(z_tf.translation, HALF)
+                {
+                    z.opening = nearest_opening(&openings, z_tf.translation, z.opening);
+                    z.stage = 0;
+                    z.via = None;
+                }
+                z.stuck_t = 0.0;
+            }
+        } else {
+            z.stuck_t = 0.0;
+        }
+        if !walking || z.stuck_t == 0.0 {
+            z.stuck_x = z_tf.translation.x;
+            z.stuck_z = z_tf.translation.z;
+        }
+
+        anim.gait = damp(anim.gait, if walking { 1.0 } else { 0.0 }, 8.0, dt);
+        pose_zombie_rig(&mut anim, dt, elapsed, pd, 0.0, 0.0, &mut transforms);
+    }
+}
+
+pub fn separate_zombies(
+    rig: Res<PlayerRig>,
+    solids: Res<SolidsNav>,
+    player_q: Query<&Transform, Without<ZombieAnim>>,
+    mut zombies: Query<(Entity, &ZombieAnim, &mut Transform)>,
+) {
+    let p_pos = player_q
+        .get(rig.root)
+        .map(|t| t.translation)
+        .unwrap_or(Vec3::ZERO);
+
+    let mut positions: Vec<(Entity, Vec3, bool)> = zombies
+        .iter()
+        .map(|(e, anim, tf)| (e, tf.translation, anim.climb >= 0.0))
+        .collect();
+
+    let n = positions.len();
+    for i in 0..n {
+        for k in (i + 1)..n {
+            let dx = positions[k].1.x - positions[i].1.x;
+            let dz = positions[k].1.z - positions[i].1.z;
+            let d2 = dx * dx + dz * dz;
+            if d2 >= Z_SPACE * Z_SPACE || d2 < 1e-6 {
+                continue;
+            }
+            let d = d2.sqrt();
+            let push = (Z_SPACE - d) * 0.5 / d;
+            positions[i].1.x -= dx * push;
+            positions[i].1.z -= dz * push;
+            positions[k].1.x += dx * push;
+            positions[k].1.z += dz * push;
+        }
+    }
+
+    for (e, mut pos, climbing) in positions {
+        if climbing {
+            continue;
+        }
+        let dx = pos.x - p_pos.x;
+        let dz = pos.z - p_pos.z;
+        let d = dx.hypot(dz);
+        if d < Z_CLOSE && d > 1e-6 {
+            pos.x += dx / d * (Z_CLOSE - d);
+            pos.z += dz / d * (Z_CLOSE - d);
+        }
+        let mut v2 = Vec2::new(pos.x, pos.z);
+        solids.push_out(&mut v2);
+        pos.x = v2.x;
+        pos.z = v2.y;
+        if let Ok((_, _, mut tf)) = zombies.get_mut(e) {
+            tf.translation.x = pos.x;
+            tf.translation.z = pos.z;
+        }
+    }
 }

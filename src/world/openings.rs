@@ -15,7 +15,6 @@ pub const DOOR_TOP: f32 = 2.03;
 pub const JAMB: f32 = 0.14;
 pub const DOOR_HP: i32 = 12;
 pub const WINDOW_HP: i32 = 2;
-#[allow(dead_code)]
 pub const CLIMB_TIME: f32 = 1.1;
 
 pub const LOG_D: f32 = 0.62;
@@ -82,7 +81,6 @@ pub struct Opening {
 pub struct Openings {
     pub list: Vec<Opening>,
     pub glass_mat: Handle<StandardMaterial>,
-    #[allow(dead_code)]
     pub glass_cracked: Handle<StandardMaterial>,
 }
 
@@ -501,4 +499,49 @@ pub fn update_openings(
             }
         }
     }
+}
+
+pub fn hit_opening(
+    idx: usize,
+    openings: &mut Openings,
+    commands: &mut Commands,
+    debris_assets: &DebrisAssets,
+    mats: &mut Query<&mut MeshMaterial3d<StandardMaterial>>,
+    visibilities: &mut Query<&mut Visibility>,
+) {
+    let cracked = openings.glass_cracked.clone();
+    let o = &mut openings.list[idx];
+    if o.hp <= 0 {
+        return;
+    }
+    o.hp -= 1;
+    o.jolt = 1.0;
+    if o.kind == OpeningKind::Door {
+        burst(o, 2, false, 0.12, 2.0, commands, debris_assets);
+    } else if o.hp > 0 {
+        if let Some(glass) = o.glass_entity {
+            if let Ok(mut mat) = mats.get_mut(glass) {
+                mat.0 = cracked;
+            }
+        }
+    }
+    if o.hp <= 0 {
+        break_opening(o, commands, debris_assets, visibilities);
+    }
+}
+
+pub fn nearest_opening(openings: &Openings, pos: Vec3, skip: Option<usize>) -> Option<usize> {
+    let mut best = None;
+    let mut bd = f32::INFINITY;
+    for (i, o) in openings.list.iter().enumerate() {
+        if skip == Some(i) {
+            continue;
+        }
+        let d = (o.x - pos.x).powi(2) + (o.z - pos.z).powi(2);
+        if d < bd {
+            bd = d;
+            best = Some(i);
+        }
+    }
+    best
 }

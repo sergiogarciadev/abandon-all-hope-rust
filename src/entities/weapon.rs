@@ -9,7 +9,7 @@ use crate::world::openings::{OpeningKind, Openings, break_opening, burst, shut_a
 use crate::world::world::{WALL_T, WallBoxes};
 
 use super::player::{PlayerRig, PlayerRigState, trigger_muzzle_flash};
-use super::zombies::{Zombie, ZombieAnim, ZombieAssets};
+use super::zombies::{Corpse, Zombie, ZombieAnim, ZombieAssets, zombie_dies};
 
 #[derive(Component)]
 pub struct Bullet {
@@ -185,6 +185,7 @@ pub fn weapon_input_and_fire(
 pub fn update_bullets(
     mut commands: Commands,
     time: Res<Time>,
+    rig: Res<PlayerRig>,
     mut stats: ResMut<GameStats>,
     wall_boxes: Res<WallBoxes>,
     mut openings: ResMut<Openings>,
@@ -193,10 +194,16 @@ pub fn update_bullets(
     zombie_assets: Res<ZombieAssets>,
     mut bullets: Query<(Entity, &mut Transform, &mut Bullet)>,
     mut zombies: Query<(Entity, &mut Transform, &mut Zombie, &mut ZombieAnim), Without<Bullet>>,
+    corpses_q: Query<(Entity, &Corpse)>,
+    player_q: Query<&Transform, (Without<Bullet>, Without<Zombie>)>,
     mut mats: Query<&mut MeshMaterial3d<StandardMaterial>>,
     mut visibilities: Query<&mut Visibility>,
 ) {
     let dt = time.delta_secs();
+    let player_pos = player_q
+        .get(rig.root)
+        .map(|t| t.translation)
+        .unwrap_or(Vec3::ZERO);
     for (b_ent, mut b_tf, mut b) in &mut bullets {
         let bpx = b_tf.translation.x;
         let bpz = b_tf.translation.z;
@@ -265,7 +272,20 @@ pub fn update_bullets(
 
                     if z_state.hp <= 0.0 {
                         stats.kills += 1;
-                        commands.entity(z_ent).despawn();
+                        zombie_dies(
+                            z_ent,
+                            &z_tf,
+                            &mut z_state,
+                            &mut z_anim,
+                            Some(b.dir),
+                            player_pos,
+                            &mut commands,
+                            &zombie_assets,
+                            &mut openings,
+                            &corpses_q,
+                            &mut mats,
+                            &mut visibilities,
+                        );
                     }
                     b.hits.insert(z_ent);
                     if b.pierce > 0 {
