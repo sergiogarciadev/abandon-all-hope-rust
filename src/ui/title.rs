@@ -364,20 +364,28 @@ pub fn setup_title_ui(mut commands: Commands, mut images: ResMut<Assets<Image>>)
             })
             .with_children(|col| {
                 col.spawn((
-                    Text::new("ABANDON ALL"),
+                    Text::new("ABANDON"),
                     TextFont {
-                        font_size: FontSize::Px(36.0),
+                        font_size: FontSize::Px(40.0),
                         ..default()
                     },
                     TextColor(Color::srgb_u8(0xe9, 0xe2, 0xd6)),
+                    TextShadow {
+                        offset: Vec2::new(0.0, 4.0),
+                        color: Color::BLACK,
+                    },
                 ));
                 col.spawn((
-                    Text::new("HOPE"),
+                    Text::new("ALL HOPE"),
                     TextFont {
-                        font_size: FontSize::Px(108.0),
+                        font_size: FontSize::Px(104.0),
                         ..default()
                     },
                     TextColor(Color::srgb_u8(0xd6, 0x45, 0x3c)),
+                    TextShadow {
+                        offset: Vec2::new(0.0, 5.0),
+                        color: Color::BLACK,
+                    },
                 ));
                 col.spawn((
                     SplashPrompt,
@@ -628,6 +636,10 @@ pub fn setup_title_ui(mut commands: Commands, mut images: ResMut<Assets<Image>>)
                     ..default()
                 },
                 TextColor(Color::srgb_u8(0xe9, 0xe2, 0xd6)),
+                TextShadow {
+                    offset: Vec2::new(0.0, 4.0),
+                    color: Color::BLACK,
+                },
             ));
             p.spawn((
                 PauseStatText,
@@ -686,6 +698,10 @@ pub fn setup_title_ui(mut commands: Commands, mut images: ResMut<Assets<Image>>)
                     ..default()
                 },
                 TextColor(Color::srgb_u8(0xb8, 0x33, 0x2b)),
+                TextShadow {
+                    offset: Vec2::new(0.0, 4.0),
+                    color: Color::BLACK,
+                },
             ));
             d.spawn((
                 DeathStatText,
@@ -869,7 +885,7 @@ pub fn update_title_ui(
     // Best run footer
     for mut txt in &mut q.best_txt {
         txt.0 = if settings.best_wave > 0 {
-            format!("BEST RUN:  NIGHT {}  /  {} KILLS", settings.best_wave, settings.best_kills)
+            format!("BEST:  WAVE {}  •  {} KILLS", settings.best_wave, settings.best_kills)
         } else {
             String::new()
         };
@@ -1102,7 +1118,7 @@ pub fn update_overlays(
 
         if paused {
             for mut txt in &mut q.pause_stat {
-                txt.0 = format!("NIGHT {}  •  {} KILLS", ctx.stats.wave, ctx.stats.kills);
+                txt.0 = format!("WAVE {}  •  {} KILLS", ctx.stats.wave, ctx.stats.kills);
             }
             for (btn, inter) in &q.pause_btns {
                 if *inter == Interaction::Pressed {
@@ -1125,13 +1141,13 @@ pub fn update_overlays(
                 save_storage(&settings);
             }
             for mut txt in &mut q.death_stat {
-                txt.0 = format!("NIGHT {}  •  {} KILLS", ctx.stats.wave, ctx.stats.kills);
+                txt.0 = format!("WAVE {}  •  {} KILLS", ctx.stats.wave, ctx.stats.kills);
             }
             for mut txt in &mut q.death_best {
                 txt.0 = if is_record {
                     "NEW RECORD".to_string()
                 } else if settings.best_wave > 0 {
-                    format!("BEST: NIGHT {}  •  {} KILLS", settings.best_wave, settings.best_kills)
+                    format!("BEST: WAVE {}  •  {} KILLS", settings.best_wave, settings.best_kills)
                 } else {
                     String::new()
                 };

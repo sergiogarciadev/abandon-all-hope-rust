@@ -27,12 +27,16 @@ pub fn start_wave(
     stats.intermission = 0.0;
     weather.target = storm_for(n);
     audio.wave_start(n);
-    banner.title = format!("NIGHT {n}");
-    banner.sub = if n == 1 {
-        "HOLD THE CABIN".to_string()
-    } else {
-        format!("{} INCOMING", stats.to_spawn)
-    };
+    banner.title = format!("WAVE {n}");
+    banner.sub = match n {
+        1 => "they are already here",
+        5 => "it starts to rain",
+        8 => "the rain sets in",
+        12 => "the storm breaks",
+        15 => "god help you",
+        _ => "it gets worse",
+    }
+    .to_string();
     banner.timer = 1.6;
 }
 

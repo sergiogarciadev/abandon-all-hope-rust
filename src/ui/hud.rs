@@ -21,13 +21,14 @@ pub const HEART_ICON: [&str; 8] = [
 
 pub fn icon_image(bitmap: &[&str; 8], color: Color) -> Image {
     let rgba = color.to_srgba().to_u8_array();
+    let dim = [rgba[0], rgba[1], rgba[2], (rgba[3] as f32 * 0.45) as u8];
     let mut data = Vec::with_capacity(8 * 8 * 4);
     for row in bitmap {
         for ch in row.chars().take(8) {
-            if ch == '#' {
-                data.extend_from_slice(&rgba);
-            } else {
-                data.extend_from_slice(&[0, 0, 0, 0]);
+            match ch {
+                '#' | 'X' => data.extend_from_slice(&rgba),
+                'o' => data.extend_from_slice(&dim),
+                _ => data.extend_from_slice(&[0, 0, 0, 0]),
             }
         }
     }
@@ -163,12 +164,16 @@ pub fn setup_hud(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
                 .with_children(|left| {
                     left.spawn((
                         WaveText,
-                        Text::new("NIGHT 1"),
+                        Text::new("WAVE 1"),
                         TextFont {
                             font_size: FontSize::Px(22.0),
                             ..default()
                         },
                         TextColor(Color::srgb_u8(0xd6, 0x45, 0x3c)),
+                        TextShadow {
+                            offset: Vec2::new(0.0, 2.0),
+                            color: Color::BLACK,
+                        },
                     ));
                     left.spawn((
                         Pickable::IGNORE,
@@ -221,6 +226,10 @@ pub fn setup_hud(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
                             ..default()
                         },
                         TextColor(Color::srgb_u8(0x8f, 0xae, 0x6b)),
+                        TextShadow {
+                            offset: Vec2::new(0.0, 2.0),
+                            color: Color::BLACK,
+                        },
                     ));
                     right.spawn((
                         LeftText,
@@ -230,6 +239,10 @@ pub fn setup_hud(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
                             ..default()
                         },
                         TextColor(Color::srgb_u8(0xcd, 0xd2, 0xd8)),
+                        TextShadow {
+                            offset: Vec2::new(0.0, 2.0),
+                            color: Color::BLACK,
+                        },
                     ));
                     right.spawn((
                         MutedText,
@@ -322,7 +335,7 @@ pub fn setup_hud(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
                 position_type: PositionType::Absolute,
                 top: Val::Percent(34.0),
                 left: Val::Px(0.0),
-                right: Val::Px(0.0),
+                width: Val::Percent(100.0),
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Center,
                 row_gap: Val::Px(8.0),
@@ -338,6 +351,10 @@ pub fn setup_hud(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
                     ..default()
                 },
                 TextColor(Color::srgba(0.84, 0.27, 0.24, 0.0)),
+                TextShadow {
+                    offset: Vec2::new(0.0, 4.0),
+                    color: Color::BLACK,
+                },
             ));
             b.spawn((
                 BannerSubText,
@@ -347,6 +364,10 @@ pub fn setup_hud(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
                     ..default()
                 },
                 TextColor(Color::srgba(0.54, 0.56, 0.60, 0.0)),
+                TextShadow {
+                    offset: Vec2::new(0.0, 2.0),
+                    color: Color::BLACK,
+                },
             ));
         });
 
@@ -358,7 +379,7 @@ pub fn setup_hud(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
                 position_type: PositionType::Absolute,
                 top: Val::Percent(22.0),
                 left: Val::Px(0.0),
-                right: Val::Px(0.0),
+                width: Val::Percent(100.0),
                 justify_content: JustifyContent::Center,
                 ..default()
             },
@@ -371,6 +392,10 @@ pub fn setup_hud(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
                 ..default()
             },
             TextColor(Color::srgba(1.0, 1.0, 1.0, 0.0)),
+            TextShadow {
+                offset: Vec2::new(0.0, 3.0),
+                color: Color::BLACK,
+            },
         ));
 }
 
@@ -451,7 +476,7 @@ pub fn update_hud(
     }
 
     for mut txt in &mut q.wave {
-        txt.0 = format!("NIGHT {}", stats.wave);
+        txt.0 = format!("WAVE {}", stats.wave);
     }
     for mut txt in &mut q.kills {
         txt.0 = format!("KILLS {}", stats.kills);
