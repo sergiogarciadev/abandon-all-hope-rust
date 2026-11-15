@@ -3,10 +3,14 @@ use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerD
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+use rand::RngExt;
 use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
 
 use crate::core::blocks::bevel_box_raw;
 use crate::core::math::{damp, ease, wrap_a};
+use crate::core::state::{AimState, GameStats};
+use crate::effects::debris::{Debris, DebrisAssets, spawn_smoke};
+use crate::world::world::HALF;
 
 use super::animation::{bone_transform, foot_cycle, ik2};
 
@@ -32,6 +36,9 @@ const MAG_Y: f32 = -0.14;
 const MAG_BASE: Vec3 = Vec3::new(0.0, -0.29, 0.53);
 const MAG_OUT: Vec3 = Vec3::new(0.0, -0.53, 0.53);
 const MAG_LINEUP: Vec3 = Vec3::new(0.0, -0.49, 0.53);
+const EJECT: Vec3 = Vec3::new(-0.08, 0.06, 0.48);
+const FLASH_COLOR: u32 = 0xffa64d;
+const FLASH_HOT: u32 = 0xff6a2a;
 
 #[derive(Resource)]
 #[allow(dead_code)]
@@ -115,6 +122,8 @@ pub struct PlayerRig {
     pub head: Entity,
     pub gun: Entity,
     pub mag: Entity,
+    pub mag_mesh: Handle<Mesh>,
+    pub metal_mat: Handle<StandardMaterial>,
     pub spare_mag: Entity,
     pub muzzle: Entity,
     pub arms: [ArmRig; 2],
@@ -426,8 +435,8 @@ pub fn setup_player(
 
     let spare_mag = commands
         .spawn((
-            Mesh3d(mag_mesh),
-            MeshMaterial3d(metal),
+            Mesh3d(mag_mesh.clone()),
+            MeshMaterial3d(metal.clone()),
             Visibility::Hidden,
             Transform::default(),
         ))
@@ -566,6 +575,8 @@ pub fn setup_player(
         head,
         gun,
         mag,
+        mag_mesh,
+        metal_mat: metal,
         spare_mag,
         muzzle,
         arms,
@@ -614,12 +625,97 @@ fn reload_hand(u: f32, gun_m: Mat4, upper_m: Mat4) -> Vec3 {
     at(i).lerp(at(i + 1), ease(t))
 }
 
-/// Temporary WASD + R movement/reload test driver for Step 4 animation verification.
-pub fn demo_player_movement(
+pub fn trigger_muzzle_flash(
+    commands: &mut Commands,
+    rig: &PlayerRig,
+    st: &mut PlayerRigState,
+    debris_assets: &DebrisAssets,
+    materials: &mut Assets<StandardMaterial>,
+    global_transforms: &Query<&GlobalTransform>,
+    hot: bool,
+) {
+    let mut rng = rand::rng();
+    st.kick = 1.0;
+    st.flash = 1.0;
+    st.flash_peak = 40.0 + rng.random::<f32>() * 20.0;
+
+    let hex = if hot { FLASH_HOT } else { FLASH_COLOR };
+    let r = ((hex >> 16) & 0xff) as f32 / 255.0;
+    let g = ((hex >> 8) & 0xff) as f32 / 255.0;
+    let b = (hex & 0xff) as f32 / 255.0;
+    let col = Color::srgb(r, g, b);
+
+    if let Some(mut mat) = materials.get_mut(&rig.flash_fire_mat) {
+        mat.base_color = col;
+        mat.emissive = LinearRgba::rgb(r, g, b) * 3.5;
+    }
+    if let Some(mut mat) = materials.get_mut(&rig.flash_glow_mat) {
+        mat.base_color = col;
+        mat.emissive = LinearRgba::rgb(r, g, b) * 2.5;
+    }
+
+    let gun_gt = global_transforms
+        .get(rig.gun)
+        .copied()
+        .unwrap_or(GlobalTransform::IDENTITY);
+    let gun_rot = gun_gt.to_scale_rotation_translation().1;
+    let eject_pos = gun_gt.transform_point(EJECT);
+    let right = gun_rot * Vec3::NEG_X;
+    let back = gun_rot * Vec3::NEG_Z;
+    let vel = right * (2.4 + rng.random::<f32>() * 1.2)
+        + back * 0.6
+        + Vec3::new(0.0, 3.0 + rng.random::<f32>(), 0.0);
+
+    commands.spawn((
+        Mesh3d(debris_assets.casing_mesh.clone()),
+        MeshMaterial3d(debris_assets.brass_mat.clone()),
+        Transform::from_translation(eject_pos).with_rotation(gun_rot),
+        Debris {
+            vel,
+            spin: Vec3::new(
+                rng.random::<f32>() * 20.0 - 10.0,
+                rng.random::<f32>() * 20.0 - 10.0,
+                rng.random::<f32>() * 20.0 - 10.0,
+            ),
+            life: 2.5,
+            max_life: 2.5,
+            bounce: 0.025,
+            smoke_size: None,
+            base_scale: Vec3::ONE,
+        },
+    ));
+
+    let muzzle_pos = global_transforms
+        .get(rig.muzzle)
+        .map(|gt| gt.translation())
+        .unwrap_or(eject_pos);
+    let smoke_rot = Quat::from_euler(
+        EulerRot::YXZ,
+        rng.random::<f32>() * 3.0,
+        rng.random::<f32>() * 3.0,
+        0.0,
+    );
+    let fwd = gun_rot * Vec3::Z;
+    spawn_smoke(
+        commands,
+        debris_assets,
+        materials,
+        muzzle_pos,
+        smoke_rot,
+        fwd * 1.6,
+        0.14 + rng.random::<f32>() * 0.06,
+    );
+}
+
+pub fn player_movement_and_aim(
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
+    windows: Query<&Window>,
+    camera_q: Query<(&Camera, &GlobalTransform)>,
     rig: Res<PlayerRig>,
-    mut state: ResMut<PlayerRigState>,
+    stats: Res<GameStats>,
+    mut rig_state: ResMut<PlayerRigState>,
+    mut aim_state: ResMut<AimState>,
     mut transforms: Query<&mut Transform>,
 ) {
     let dt = time.delta_secs();
@@ -637,39 +733,41 @@ pub fn demo_player_movement(
         dir.x += 1.0;
     }
     let move_dir = dir.normalize_or_zero();
-    state.vel = move_dir * state.speed;
+    rig_state.vel = move_dir * stats.speed;
 
-    if keys.just_pressed(KeyCode::KeyR) && !state.reloading {
-        state.reloading = true;
-        state.reload_t = 0.0;
-    }
-    if state.reloading {
-        state.reload_t += dt;
-        if state.reload_t >= state.reload_time {
-            state.reloading = false;
-            state.reload_t = 0.0;
-        }
-    }
+    let clamp_lim = HALF - 0.7;
+    if let Ok(mut p_tf) = transforms.get_mut(rig.root) {
+        p_tf.translation.x = (p_tf.translation.x + rig_state.vel.x * dt).clamp(-clamp_lim, clamp_lim);
+        p_tf.translation.z = (p_tf.translation.z + rig_state.vel.y * dt).clamp(-clamp_lim, clamp_lim);
 
-    if let Ok(mut tf) = transforms.get_mut(rig.root) {
-        tf.translation.x = (tf.translation.x + state.vel.x * dt).clamp(-9.0, 9.0);
-        tf.translation.z = (tf.translation.z + state.vel.y * dt).clamp(-9.0, 9.0);
-        if move_dir.length_squared() > 0.01 {
-            let target_yaw = move_dir.x.atan2(move_dir.y);
-            let (_, cur_yaw, _) = tf.rotation.to_euler(EulerRot::YXZ);
-            let next_yaw = wrap_a(cur_yaw + wrap_a(target_yaw - cur_yaw) * (1.0 - (-10.0 * dt).exp()));
-            tf.rotation = Quat::from_rotation_y(next_yaw);
+        if let (Ok(window), Ok((camera, cam_gt))) = (windows.single(), camera_q.single()) {
+            if let Some(cursor_pos) = window.cursor_position() {
+                if let Ok(ray) = camera.viewport_to_world(cam_gt, cursor_pos) {
+                    if let Some(dist) =
+                        ray.intersect_plane(Vec3::new(0.0, 0.9, 0.0), InfinitePlane3d::new(Vec3::Y))
+                    {
+                        let hit = ray.get_point(dist);
+                        aim_state.aim_point = hit;
+                        let yaw = (hit.x - p_tf.translation.x).atan2(hit.z - p_tf.translation.z);
+                        p_tf.rotation = Quat::from_rotation_y(yaw);
+                    }
+                }
+            }
         }
     }
 }
 
 /// Poses the survivor's hierarchical rig every frame using 2-bone IK and gait cycles.
 pub fn animate_player(
+    mut commands: Commands,
     time: Res<Time>,
     rig: Res<PlayerRig>,
     mut st: ResMut<PlayerRigState>,
     mut transforms: Query<&mut Transform>,
+    global_transforms: Query<&GlobalTransform>,
     mut visibilities: Query<&mut Visibility>,
+    mut lights: Query<&mut PointLight>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let dt = time.delta_secs();
     let mx = st.vel.x;
@@ -837,6 +935,26 @@ pub fn animate_player(
     if let Ok(mut vis) = visibilities.get_mut(rig.mag) {
         *vis = if mag_vis { Visibility::Inherited } else { Visibility::Hidden };
     }
+    if st.reloading && u >= 0.22 && !st.mag_dropped {
+        st.mag_dropped = true;
+        if let Ok(mag_gt) = global_transforms.get(rig.mag) {
+            let (_, rot, pos) = mag_gt.to_scale_rotation_translation();
+            commands.spawn((
+                Mesh3d(rig.mag_mesh.clone()),
+                MeshMaterial3d(rig.metal_mat.clone()),
+                Transform::from_translation(pos).with_rotation(rot),
+                Debris {
+                    vel: Vec3::new(0.0, -1.0, 0.0),
+                    spin: Vec3::new(3.0, 0.0, 2.0),
+                    life: 4.0,
+                    max_life: 4.0,
+                    bounce: 0.05,
+                    smoke_size: None,
+                    base_scale: Vec3::ONE,
+                },
+            ));
+        }
+    }
 
     // Arms & Hands
     let g_r = gun_m.transform_point3(GRIP_R);
@@ -874,6 +992,33 @@ pub fn animate_player(
         if let Ok(mut tf) = transforms.get_mut(rig.spare_mag) {
             tf.rotation = gun_rot;
             tf.translation = left_wrist + gun_rot * Vec3::new(0.0, 0.13, 0.0);
+        }
+    }
+
+    // Muzzle flash fadeout
+    st.flash = (st.flash - dt / 0.07).max(0.0);
+    let f = st.flash;
+    if let Ok(mut vis) = visibilities.get_mut(rig.flash) {
+        *vis = if f > 0.3 { Visibility::Inherited } else { Visibility::Hidden };
+    }
+    if let Some(mut mat) = materials.get_mut(&rig.flash_core_mat) {
+        mat.base_color.set_alpha((f * 1.4).min(1.0));
+    }
+    if let Some(mut mat) = materials.get_mut(&rig.flash_fire_mat) {
+        mat.base_color.set_alpha((f * 1.2).min(1.0));
+    }
+    if let Some(mut mat) = materials.get_mut(&rig.flash_glow_mat) {
+        mat.base_color.set_alpha(0.85 * f);
+    }
+    if let Ok(mut light) = lights.get_mut(rig.muzzle_light) {
+        light.intensity = st.flash_peak * 1000.0 * f * f;
+    }
+    if f > 0.0 {
+        if let Ok(muzzle_gt) = global_transforms.get(rig.muzzle) {
+            let mp = muzzle_gt.translation();
+            if let Ok(mut tf) = transforms.get_mut(rig.muzzle_light) {
+                tf.translation = Vec3::new(mp.x + aim.sin() * 0.4, mp.y, mp.z + aim.cos() * 0.4);
+            }
         }
     }
 }

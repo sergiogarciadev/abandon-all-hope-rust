@@ -38,7 +38,6 @@ const NEEDLES: u32 = 0x1a2b1a;
 const NEEDLE_TIPS: u32 = 0x2a4229;
 
 #[derive(Clone, Copy)]
-#[allow(dead_code)]
 pub struct WallBox {
     pub min_x: f32,
     pub max_x: f32,

@@ -1,8 +1,10 @@
 use bevy::prelude::*;
-use std::f32::consts::PI;
+use rand::RngExt;
+use std::f32::consts::{FRAC_PI_2, PI};
 
 use crate::core::blocks::{BlockBatch, BlockSpec, bake_blocks};
 use crate::core::math::SeededRng;
+use crate::effects::debris::{Debris, DebrisAssets};
 
 pub const OPENING_INSET: f32 = 1.5;
 pub const SILL_X: f32 = 0.85;
@@ -346,5 +348,157 @@ pub fn fit_opening(
         o.glass_entity = Some(glass);
         o.bars_entity = Some(bars);
         o.shards_entity = Some(shards);
+    }
+}
+
+pub fn burst(
+    o: &Opening,
+    n: usize,
+    is_glass: bool,
+    size: f32,
+    speed: f32,
+    commands: &mut Commands,
+    debris_assets: &DebrisAssets,
+) {
+    let sx = o.ix - o.x;
+    let sz = o.iz - o.z;
+    let l = sx.hypot(sz).max(1e-4);
+    let mut rng = rand::rng();
+    let mat = if is_glass {
+        debris_assets.glass_chip_mat.clone()
+    } else {
+        debris_assets.wood_chip_mat.clone()
+    };
+
+    for _ in 0..n {
+        let scale = Vec3::new(
+            size * (0.4 + rng.random::<f32>() * 0.6),
+            size * (0.2 + rng.random::<f32>() * 0.4),
+            size * (1.0 + rng.random::<f32>() * 1.5),
+        );
+        let along = (rng.random::<f32>() - 0.5) * (o.w - 0.3);
+        let px = o.x + if o.axis == WallAxis::X { along } else { 0.0 };
+        let py = if o.kind == OpeningKind::Door {
+            0.3 + rng.random::<f32>() * 1.5
+        } else {
+            o.sill + 0.05 + rng.random::<f32>() * (o.head - o.sill - 0.1)
+        };
+        let pz = o.z + if o.axis == WallAxis::Z { along } else { 0.0 };
+        let rot = Quat::from_euler(
+            EulerRot::YXZ,
+            rng.random::<f32>() * 3.0,
+            rng.random::<f32>() * 3.0,
+            rng.random::<f32>() * 3.0,
+        );
+        let v = speed * (0.5 + rng.random::<f32>() * 0.7);
+        let vel = Vec3::new(
+            sx / l * v + (rng.random::<f32>() - 0.5) * 2.0,
+            0.5 + rng.random::<f32>() * 2.0,
+            sz / l * v + (rng.random::<f32>() - 0.5) * 2.0,
+        );
+        let life = 2.0 + rng.random::<f32>() * 1.5;
+        commands.spawn((
+            Mesh3d(debris_assets.cube_mesh.clone()),
+            MeshMaterial3d(mat.clone()),
+            Transform::from_xyz(px, py, pz)
+                .with_rotation(rot)
+                .with_scale(scale),
+            Debris {
+                vel,
+                spin: Vec3::new(
+                    (rng.random::<f32>() - 0.5) * 24.0,
+                    (rng.random::<f32>() - 0.5) * 24.0,
+                    (rng.random::<f32>() - 0.5) * 24.0,
+                ),
+                life,
+                max_life: life,
+                bounce: 0.02,
+                smoke_size: None,
+                base_scale: scale,
+            },
+        ));
+    }
+}
+
+pub fn break_opening(
+    o: &mut Opening,
+    commands: &mut Commands,
+    debris_assets: &DebrisAssets,
+    visibilities: &mut Query<&mut Visibility>,
+) {
+    o.hp = 0;
+    if o.kind == OpeningKind::Door {
+        o.fall_t = 0.0;
+        burst(o, 9, false, 0.16, 3.5, commands, debris_assets);
+    } else {
+        for e in [o.glass_entity, o.bars_entity].into_iter().flatten() {
+            if let Ok(mut vis) = visibilities.get_mut(e) {
+                *vis = Visibility::Hidden;
+            }
+        }
+        if let Some(shards) = o.shards_entity {
+            if let Ok(mut vis) = visibilities.get_mut(shards) {
+                *vis = Visibility::Inherited;
+            }
+        }
+        burst(o, 16, true, 0.09, 4.0, commands, debris_assets);
+    }
+}
+
+pub fn shut_at(openings: &Openings, x: f32, z: f32) -> Option<usize> {
+    openings.list.iter().position(|o| {
+        o.hp > 0
+            && x >= o.bbox.min_x
+            && x <= o.bbox.max_x
+            && z >= o.bbox.min_z
+            && z <= o.bbox.max_z
+    })
+}
+
+pub fn update_openings(
+    time: Res<Time>,
+    mut openings: ResMut<Openings>,
+    mut transforms: Query<&mut Transform>,
+) {
+    let dt = time.delta_secs();
+    for o in &mut openings.list {
+        o.jolt *= (-9.0 * dt).exp();
+        if o.kind == OpeningKind::Window {
+            if let Some(pane) = o.pane_entity {
+                if let Ok(mut tf) = transforms.get_mut(pane) {
+                    tf.translation.z = -0.03 * o.jolt;
+                }
+            }
+            continue;
+        }
+        if o.fall_t >= 0.0 {
+            o.fall_t += dt;
+            let k = (o.fall_t / 0.5).min(1.0);
+            let slap = if k >= 1.0 {
+                0.05 * (-(o.fall_t - 0.5) * 10.0).exp() * ((o.fall_t - 0.5) * 30.0).sin()
+            } else {
+                0.0
+            };
+            if let Some(leaf) = o.leaf_entity {
+                if let Ok(mut tf) = transforms.get_mut(leaf) {
+                    tf.rotation = Quat::IDENTITY;
+                }
+            }
+            if let Some(fall) = o.fall_entity {
+                if let Ok(mut tf) = transforms.get_mut(fall) {
+                    tf.rotation = Quat::from_rotation_x(-(FRAC_PI_2 - 0.02) * k * k + slap);
+                    tf.translation = Vec3::new(0.0, 0.08 * k, -0.02 - 0.35 * k);
+                }
+            }
+            continue;
+        }
+        if o.hp <= 0 {
+            continue;
+        }
+        if let Some(leaf) = o.leaf_entity {
+            if let Ok(mut tf) = transforms.get_mut(leaf) {
+                tf.rotation = Quat::from_rotation_y(o.jolt * 0.07);
+            }
+        }
     }
 }

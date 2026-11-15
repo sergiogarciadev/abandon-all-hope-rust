@@ -30,6 +30,13 @@ pub struct ZombieLimb {
 }
 
 #[derive(Component)]
+pub struct Zombie {
+    pub hp: f32,
+    pub hurt: f32,
+    pub body: Vec<Entity>,
+}
+
+#[derive(Component)]
 #[allow(dead_code)]
 pub struct ZombieAnim {
     pub pelvis: Entity,
@@ -392,7 +399,18 @@ pub fn spawn_zombie_preview(commands: &mut Commands, assets: &ZombieAssets, kind
     };
     let limbs = [make_limb(0, 1.0), make_limb(1, -1.0)];
 
-    commands.entity(root).insert(ZombieAnim {
+    let mut body = vec![pelvis, torso, head, jaw];
+    for l in &limbs {
+        body.extend_from_slice(&[l.thigh, l.shin, l.foot, l.upper_arm, l.forearm]);
+    }
+
+    commands.entity(root).insert((
+        Zombie {
+            hp: 2.0,
+            hurt: 0.0,
+            body,
+        },
+        ZombieAnim {
         pelvis,
         upper,
         head,
@@ -413,7 +431,8 @@ pub fn spawn_zombie_preview(commands: &mut Commands, assets: &ZombieAssets, kind
         swing: -1.0,
         climb: -1.0,
         fall_dir: 1.0,
-    });
+    },
+    ));
 }
 
 pub fn pose_zombie_rig(
@@ -601,13 +620,25 @@ pub fn pose_zombie_rig(
 
 pub fn animate_preview_zombies(
     time: Res<Time>,
-    mut zombies: Query<&mut ZombieAnim>,
+    assets: Res<ZombieAssets>,
+    mut zombies: Query<(&mut Zombie, &mut ZombieAnim)>,
     mut transforms: Query<&mut Transform>,
+    mut mats: Query<&mut MeshMaterial3d<StandardMaterial>>,
 ) {
     let dt = time.delta_secs();
     let elapsed = time.elapsed_secs();
-    for mut z in &mut zombies {
-        pose_zombie_rig(&mut z, dt, elapsed, 5.0, 0.0, 0.0, &mut transforms);
+    for (mut z_state, mut anim) in &mut zombies {
+        if z_state.hurt > 0.0 {
+            z_state.hurt -= dt;
+            if z_state.hurt <= 0.0 {
+                for &m in &z_state.body {
+                    if let Ok(mut mat) = mats.get_mut(m) {
+                        mat.0 = assets.skin_mat.clone();
+                    }
+                }
+            }
+        }
+        pose_zombie_rig(&mut anim, dt, elapsed, 5.0, 0.0, 0.0, &mut transforms);
     }
 }
 
