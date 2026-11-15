@@ -55,6 +55,8 @@ pub struct PlayerRigState {
     pub kick: f32,
     pub flash: f32,
     pub flash_peak: f32,
+    pub flash_scale: f32,
+    pub flash_color: LinearRgba,
     pub reload: f32,
     pub mag_dropped: bool,
     pub t: f32,
@@ -80,6 +82,8 @@ impl Default for PlayerRigState {
             kick: 0.0,
             flash: 0.0,
             flash_peak: 0.0,
+            flash_scale: 1.0,
+            flash_color: LinearRgba::rgb(1.0, 0.65, 0.3),
             reload: 0.0,
             mag_dropped: false,
             t: 0.0,
@@ -470,17 +474,17 @@ pub fn setup_player(
     };
     let arms = [build_arm(1.0), build_arm(-1.0)];
 
-    // Muzzle flash
+    // Muzzle flash (kept Visible at tiny scale & black emissive at startup to pre-warm additive pipeline)
     let flash_core_mat = materials.add(StandardMaterial {
         base_color: Color::srgba_u8(0xff, 0xf3, 0xd0, 0),
-        emissive: LinearRgba::rgb(1.0, 0.95, 0.82) * 4.0,
+        emissive: LinearRgba::BLACK,
         alpha_mode: AlphaMode::Add,
         unlit: true,
         ..default()
     });
     let flash_fire_mat = materials.add(StandardMaterial {
         base_color: Color::srgba_u8(0xff, 0xa6, 0x4d, 0),
-        emissive: LinearRgba::rgb(1.0, 0.65, 0.30) * 3.5,
+        emissive: LinearRgba::BLACK,
         alpha_mode: AlphaMode::Add,
         unlit: true,
         ..default()
@@ -489,7 +493,7 @@ pub fn setup_player(
     let flash_glow_mat = materials.add(StandardMaterial {
         base_color: Color::srgba_u8(0xff, 0xa6, 0x4d, 0),
         base_color_texture: Some(glow_tex),
-        emissive: LinearRgba::rgb(1.0, 0.65, 0.30) * 2.5,
+        emissive: LinearRgba::BLACK,
         alpha_mode: AlphaMode::Add,
         unlit: true,
         ..default()
@@ -509,7 +513,10 @@ pub fn setup_player(
         .id();
 
     let flash = commands
-        .spawn((Transform::default(), Visibility::Hidden))
+        .spawn((
+            Transform::from_scale(Vec3::splat(0.0001)),
+            Visibility::Inherited,
+        ))
         .id();
     commands.entity(muzzle).add_child(flash);
 
@@ -632,26 +639,54 @@ pub fn trigger_muzzle_flash(
     debris_assets: &DebrisAssets,
     materials: &mut Assets<StandardMaterial>,
     global_transforms: &Query<&GlobalTransform>,
+    transforms: &mut Query<&mut Transform>,
     hot: bool,
 ) {
     let mut rng = rand::rng();
     st.kick = 1.0;
     st.flash = 1.0;
     st.flash_peak = 40.0 + rng.random::<f32>() * 20.0;
+    st.flash_scale = 0.85 + rng.random::<f32>() * 0.4;
 
     let hex = if hot { FLASH_HOT } else { FLASH_COLOR };
     let r = ((hex >> 16) & 0xff) as f32 / 255.0;
     let g = ((hex >> 8) & 0xff) as f32 / 255.0;
     let b = (hex & 0xff) as f32 / 255.0;
     let col = Color::srgb(r, g, b);
+    st.flash_color = LinearRgba::rgb(r, g, b);
 
     if let Some(mut mat) = materials.get_mut(&rig.flash_fire_mat) {
         mat.base_color = col;
-        mat.emissive = LinearRgba::rgb(r, g, b) * 3.5;
+        mat.emissive = st.flash_color * 3.5;
     }
     if let Some(mut mat) = materials.get_mut(&rig.flash_glow_mat) {
         mat.base_color = col;
-        mat.emissive = LinearRgba::rgb(r, g, b) * 2.5;
+        mat.emissive = st.flash_color * 2.5;
+    }
+    if let Some(mut mat) = materials.get_mut(&rig.flash_core_mat) {
+        mat.emissive = LinearRgba::rgb(1.0, 0.95, 0.82) * 4.0;
+    }
+
+    if let Ok(mut tf) = transforms.get_mut(rig.flash) {
+        tf.rotation = Quat::from_rotation_z(rng.random::<f32>() * PI);
+        tf.scale = Vec3::splat(st.flash_scale);
+    }
+    if let Ok(mut tf) = transforms.get_mut(rig.flash_core) {
+        tf.scale = Vec3::splat(0.16 + rng.random::<f32>() * 0.06);
+    }
+    for (i, &s_ent) in rig.flash_spikes.iter().enumerate() {
+        let len = if i > 1 {
+            0.2 + rng.random::<f32>() * 0.22
+        } else {
+            (if i > 0 { 0.65 } else { 0.4 }) + rng.random::<f32>() * 0.35
+        };
+        let w = if i > 1 { 0.09 } else if i > 0 { 0.24 } else { 0.13 };
+        if let Ok(mut tf) = transforms.get_mut(s_ent) {
+            tf.scale = Vec3::new(w, len, w);
+        }
+    }
+    if let Ok(mut tf) = transforms.get_mut(rig.flash_glow) {
+        tf.scale = Vec3::splat(2.0 + rng.random::<f32>() * 0.6);
     }
 
     let gun_gt = global_transforms
@@ -998,17 +1033,39 @@ pub fn animate_player(
     // Muzzle flash fadeout
     st.flash = (st.flash - dt / 0.07).max(0.0);
     let f = st.flash;
-    if let Ok(mut vis) = visibilities.get_mut(rig.flash) {
-        *vis = if f > 0.3 { Visibility::Inherited } else { Visibility::Hidden };
+    if let Ok(mut tf) = transforms.get_mut(rig.flash) {
+        tf.scale = if f > 0.3 {
+            Vec3::splat(st.flash_scale)
+        } else {
+            Vec3::ZERO
+        };
     }
     if let Some(mut mat) = materials.get_mut(&rig.flash_core_mat) {
-        mat.base_color.set_alpha((f * 1.4).min(1.0));
+        let a = (f * 1.4).min(1.0);
+        mat.base_color.set_alpha(a);
+        mat.emissive = if f > 0.3 {
+            LinearRgba::rgb(1.0, 0.95, 0.82) * (4.0 * a)
+        } else {
+            LinearRgba::BLACK
+        };
     }
     if let Some(mut mat) = materials.get_mut(&rig.flash_fire_mat) {
-        mat.base_color.set_alpha((f * 1.2).min(1.0));
+        let a = (f * 1.2).min(1.0);
+        mat.base_color.set_alpha(a);
+        mat.emissive = if f > 0.3 {
+            st.flash_color * (3.5 * a)
+        } else {
+            LinearRgba::BLACK
+        };
     }
     if let Some(mut mat) = materials.get_mut(&rig.flash_glow_mat) {
-        mat.base_color.set_alpha(0.85 * f);
+        let a = 0.85 * f;
+        mat.base_color.set_alpha(a);
+        mat.emissive = if f > 0.3 {
+            st.flash_color * (2.5 * a)
+        } else {
+            LinearRgba::BLACK
+        };
     }
     if let Ok(mut light) = lights.get_mut(rig.muzzle_light) {
         light.intensity = st.flash_peak * 1000.0 * f * f;

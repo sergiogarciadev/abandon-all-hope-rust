@@ -107,7 +107,7 @@ pub fn weapon_input_and_fire(
     debris_assets: Res<DebrisAssets>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     global_transforms: Query<&GlobalTransform>,
-    transforms: Query<&Transform>,
+    mut transforms: Query<&mut Transform>,
 ) {
     let dt = time.delta_secs();
     stats.fire_cd -= dt;
@@ -174,6 +174,7 @@ pub fn weapon_input_and_fire(
                 &debris_assets,
                 &mut materials,
                 &global_transforms,
+                &mut transforms,
                 hot,
             );
             stats.shake = stats.shake.max(0.12);
