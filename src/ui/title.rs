@@ -156,66 +156,6 @@ fn make_grain_image() -> Image {
     img
 }
 
-/// Procedural 4-octave fractal-noise grit overlay matching CSS `.distressed` chipped-paint mask.
-fn make_distressed_image() -> Image {
-    let w = 256usize;
-    let h = 128usize;
-    let mut data = Vec::with_capacity(w * h * 4);
-
-    let hash2 = |ix: i32, iy: i32, seed: u32| -> f32 {
-        let mut n = (ix.wrapping_mul(374_761_393))
-            .wrapping_add(iy.wrapping_mul(668_265_263))
-            .wrapping_add((seed as i32).wrapping_mul(1_442_695_041)) as u32;
-        n = (n ^ (n >> 13)).wrapping_mul(1_274_126_177);
-        ((n ^ (n >> 16)) & 0xFFFF) as f32 / 65535.0
-    };
-
-    let vnoise = |x: f32, y: f32, seed: u32| -> f32 {
-        let ix = x.floor() as i32;
-        let iy = y.floor() as i32;
-        let fx = x - ix as f32;
-        let fy = y - iy as f32;
-        let ux = fx * fx * (3.0 - 2.0 * fx);
-        let uy = fy * fy * (3.0 - 2.0 * fy);
-        let a = hash2(ix, iy, seed);
-        let b = hash2(ix + 1, iy, seed);
-        let c = hash2(ix, iy + 1, seed);
-        let d = hash2(ix + 1, iy + 1, seed);
-        (a + (b - a) * ux) + ((c + (d - c) * ux) - (a + (b - a) * ux)) * uy
-    };
-
-    for y in 0..h {
-        for x in 0..w {
-            let mut sum = 0.0_f32;
-            let mut amp = 0.5_f32;
-            let mut freq = 0.045_f32;
-            for oct in 0..4u32 {
-                sum += vnoise(x as f32 * freq, y as f32 * freq, 4 + oct * 17) * amp;
-                freq *= 2.0;
-                amp *= 0.5;
-            }
-            // Threshold like CSS feColorMatrix (-9 * n + 6.58) inverted to chip away paint
-            let chip = ((sum - 0.56) * 8.0).clamp(0.0, 0.92);
-            let a = (chip * 255.0) as u8;
-            data.extend_from_slice(&[6, 6, 9, a]);
-        }
-    }
-
-    let mut img = Image::new(
-        Extent3d {
-            width: w as u32,
-            height: h as u32,
-            depth_or_array_layers: 1,
-        },
-        TextureDimension::D2,
-        data,
-        TextureFormat::Rgba8UnormSrgb,
-        RenderAssetUsages::RENDER_WORLD,
-    );
-    img.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor::linear());
-    img
-}
-
 pub fn spawn_title_zombies(
     mut commands: Commands,
     zombie_assets: Option<Res<ZombieAssets>>,
@@ -346,7 +286,6 @@ pub fn wander_title_zombies(
 
 pub fn setup_title_ui(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     let grain_handle = images.add(make_grain_image());
-    let distressed_handle = images.add(make_distressed_image());
     commands.insert_resource(GrainImage(grain_handle.clone()));
 
     // Startup fade-in overlay
@@ -424,56 +363,30 @@ pub fn setup_title_ui(mut commands: Commands, mut images: ResMut<Assets<Image>>)
                 ..default()
             })
             .with_children(|col| {
-                col.spawn(Node {
-                    flex_direction: FlexDirection::Column,
-                    ..default()
-                })
-                .with_children(|title_box| {
-                    title_box.spawn((
-                        Text::new("ABANDON"),
-                        TextFont {
-                            font_size: FontSize::Px(40.0),
-                            ..default()
-                        },
-                        TextColor(Color::srgb_u8(0xe9, 0xe2, 0xd6)),
-                        TextShadow {
-                            offset: Vec2::new(0.0, 4.0),
-                            color: Color::BLACK,
-                        },
-                    ));
-                    title_box.spawn((
-                        Text::new("ALL HOPE"),
-                        TextFont {
-                            font_size: FontSize::Px(104.0),
-                            ..default()
-                        },
-                        TextColor(Color::srgb_u8(0xd6, 0x45, 0x3c)),
-                        TextShadow {
-                            offset: Vec2::new(0.0, 5.0),
-                            color: Color::BLACK,
-                        },
-                    ));
-                    title_box.spawn((
-                        Pickable::IGNORE,
-                        ImageNode {
-                            image: distressed_handle.clone(),
-                            image_mode: NodeImageMode::Tiled {
-                                tile_x: true,
-                                tile_y: true,
-                                stretch_value: 1.0,
-                            },
-                            ..default()
-                        },
-                        Node {
-                            position_type: PositionType::Absolute,
-                            left: Val::Px(0.0),
-                            top: Val::Px(0.0),
-                            width: Val::Percent(100.0),
-                            height: Val::Percent(100.0),
-                            ..default()
-                        },
-                    ));
-                });
+                col.spawn((
+                    Text::new("ABANDON"),
+                    TextFont {
+                        font_size: FontSize::Px(40.0),
+                        ..default()
+                    },
+                    TextColor(Color::srgb_u8(0xe9, 0xe2, 0xd6)),
+                    TextShadow {
+                        offset: Vec2::new(0.0, 4.0),
+                        color: Color::BLACK,
+                    },
+                ));
+                col.spawn((
+                    Text::new("ALL HOPE"),
+                    TextFont {
+                        font_size: FontSize::Px(104.0),
+                        ..default()
+                    },
+                    TextColor(Color::srgb_u8(0xd6, 0x45, 0x3c)),
+                    TextShadow {
+                        offset: Vec2::new(0.0, 5.0),
+                        color: Color::BLACK,
+                    },
+                ));
                 col.spawn((
                     SplashPrompt,
                     Text::new("PRESS ANY KEY OR CLICK"),
@@ -716,40 +629,18 @@ pub fn setup_title_ui(mut commands: Commands, mut images: ResMut<Assets<Image>>)
             BackgroundColor(Color::srgba(0.02, 0.02, 0.03, 0.80)),
         ))
         .with_children(|p| {
-            p.spawn(Node::default()).with_children(|tb| {
-                tb.spawn((
-                    Text::new("PAUSED"),
-                    TextFont {
-                        font_size: FontSize::Px(82.0),
-                        ..default()
-                    },
-                    TextColor(Color::srgb_u8(0xe9, 0xe2, 0xd6)),
-                    TextShadow {
-                        offset: Vec2::new(0.0, 4.0),
-                        color: Color::BLACK,
-                    },
-                ));
-                tb.spawn((
-                    Pickable::IGNORE,
-                    ImageNode {
-                        image: distressed_handle.clone(),
-                        image_mode: NodeImageMode::Tiled {
-                            tile_x: true,
-                            tile_y: true,
-                            stretch_value: 1.0,
-                        },
-                        ..default()
-                    },
-                    Node {
-                        position_type: PositionType::Absolute,
-                        left: Val::Px(0.0),
-                        top: Val::Px(0.0),
-                        width: Val::Percent(100.0),
-                        height: Val::Percent(100.0),
-                        ..default()
-                    },
-                ));
-            });
+            p.spawn((
+                Text::new("PAUSED"),
+                TextFont {
+                    font_size: FontSize::Px(82.0),
+                    ..default()
+                },
+                TextColor(Color::srgb_u8(0xe9, 0xe2, 0xd6)),
+                TextShadow {
+                    offset: Vec2::new(0.0, 4.0),
+                    color: Color::BLACK,
+                },
+            ));
             p.spawn((
                 PauseStatText,
                 Text::new(""),
@@ -800,40 +691,18 @@ pub fn setup_title_ui(mut commands: Commands, mut images: ResMut<Assets<Image>>)
             BackgroundColor(Color::srgba(0.03, 0.01, 0.01, 0.86)),
         ))
         .with_children(|d| {
-            d.spawn(Node::default()).with_children(|tb| {
-                tb.spawn((
-                    Text::new("YOU DIED"),
-                    TextFont {
-                        font_size: FontSize::Px(92.0),
-                        ..default()
-                    },
-                    TextColor(Color::srgb_u8(0xb8, 0x33, 0x2b)),
-                    TextShadow {
-                        offset: Vec2::new(0.0, 4.0),
-                        color: Color::BLACK,
-                    },
-                ));
-                tb.spawn((
-                    Pickable::IGNORE,
-                    ImageNode {
-                        image: distressed_handle,
-                        image_mode: NodeImageMode::Tiled {
-                            tile_x: true,
-                            tile_y: true,
-                            stretch_value: 1.0,
-                        },
-                        ..default()
-                    },
-                    Node {
-                        position_type: PositionType::Absolute,
-                        left: Val::Px(0.0),
-                        top: Val::Px(0.0),
-                        width: Val::Percent(100.0),
-                        height: Val::Percent(100.0),
-                        ..default()
-                    },
-                ));
-            });
+            d.spawn((
+                Text::new("YOU DIED"),
+                TextFont {
+                    font_size: FontSize::Px(92.0),
+                    ..default()
+                },
+                TextColor(Color::srgb_u8(0xb8, 0x33, 0x2b)),
+                TextShadow {
+                    offset: Vec2::new(0.0, 4.0),
+                    color: Color::BLACK,
+                },
+            ));
             d.spawn((
                 DeathStatText,
                 Text::new(""),
