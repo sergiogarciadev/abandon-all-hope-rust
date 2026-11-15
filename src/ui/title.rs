@@ -156,6 +156,36 @@ fn make_grain_image() -> Image {
     img
 }
 
+/// Smooth horizontal gradient scrim matching CSS `linear-gradient(90deg, rgba(4,4,7,.88) 0%, rgba(4,4,7,.62) 28%, rgba(4,4,7,0) 58%)`.
+fn make_scrim_image() -> Image {
+    let w = 256usize;
+    let mut data = Vec::with_capacity(w * 4);
+    for x in 0..w {
+        let u = x as f32 / (w - 1) as f32;
+        let alpha = if u < 0.28 {
+            0.88 + (0.62 - 0.88) * (u / 0.28)
+        } else if u < 0.58 {
+            0.62 * (1.0 - (u - 0.28) / 0.30)
+        } else {
+            0.0
+        };
+        data.extend_from_slice(&[4, 4, 7, (alpha * 255.0) as u8]);
+    }
+    let mut img = Image::new(
+        Extent3d {
+            width: w as u32,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        data,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    img.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor::linear());
+    img
+}
+
 pub fn spawn_title_zombies(
     mut commands: Commands,
     zombie_assets: Option<Res<ZombieAssets>>,
@@ -286,6 +316,7 @@ pub fn wander_title_zombies(
 
 pub fn setup_title_ui(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     let grain_handle = images.add(make_grain_image());
+    let scrim_handle = images.add(make_scrim_image());
     commands.insert_resource(GrainImage(grain_handle.clone()));
 
     // Startup fade-in overlay
@@ -339,18 +370,22 @@ pub fn setup_title_ui(mut commands: Commands, mut images: ResMut<Assets<Image>>)
                     ..default()
                 },
             ));
-            // Left dark scrim
+            // Smooth left-hand gradient scrim (no hard seam)
             root.spawn((
                 Pickable::IGNORE,
+                ImageNode {
+                    image: scrim_handle,
+                    image_mode: NodeImageMode::Stretch,
+                    ..default()
+                },
                 Node {
                     position_type: PositionType::Absolute,
                     left: Val::Px(0.0),
                     top: Val::Px(0.0),
-                    bottom: Val::Px(0.0),
-                    width: Val::Percent(48.0),
+                    width: Val::Percent(100.0),
+                    height: Val::Percent(100.0),
                     ..default()
                 },
-                BackgroundColor(Color::srgba(0.015, 0.015, 0.025, 0.84)),
             ));
 
             // Main column
