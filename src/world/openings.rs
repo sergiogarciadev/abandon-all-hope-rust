@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use rand::RngExt;
 use std::f32::consts::{FRAC_PI_2, PI};
 
+use crate::audio::AudioEngine;
 use crate::core::blocks::{BlockBatch, BlockSpec, bake_blocks};
 use crate::core::math::SeededRng;
 use crate::effects::debris::{Debris, DebrisAssets};
@@ -506,6 +507,7 @@ pub fn hit_opening(
     openings: &mut Openings,
     commands: &mut Commands,
     debris_assets: &DebrisAssets,
+    audio: &AudioEngine,
     mats: &mut Query<&mut MeshMaterial3d<StandardMaterial>>,
     visibilities: &mut Query<&mut Visibility>,
 ) {
@@ -514,11 +516,16 @@ pub fn hit_opening(
     if o.hp <= 0 {
         return;
     }
+    let pos = Vec3::new(o.x, 0.0, o.z);
     o.hp -= 1;
     o.jolt = 1.0;
     if o.kind == OpeningKind::Door {
         burst(o, 2, false, 0.12, 2.0, commands, debris_assets);
+        if o.hp > 0 {
+            audio.bash(pos, 1.0);
+        }
     } else if o.hp > 0 {
+        audio.crack(pos);
         if let Some(glass) = o.glass_entity {
             if let Ok(mut mat) = mats.get_mut(glass) {
                 mat.0 = cracked;
@@ -526,6 +533,11 @@ pub fn hit_opening(
         }
     }
     if o.hp <= 0 {
+        if o.kind == OpeningKind::Door {
+            audio.door_break(pos);
+        } else {
+            audio.shatter(pos);
+        }
         break_opening(o, commands, debris_assets, visibilities);
     }
 }

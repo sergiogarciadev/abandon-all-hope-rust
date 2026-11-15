@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use rand::RngExt;
 use std::f32::consts::TAU;
 
+use crate::audio::AudioEngine;
 use crate::core::state::{GameState, GameStats};
 use crate::entities::player::PlayerRig;
 use crate::entities::zombies::{Corpse, Zombie, ZombieAssets, spawn_zombie};
@@ -11,7 +12,7 @@ use crate::world::world::EDGE;
 
 const MAX_ALIVE: usize = 30;
 
-pub fn start_wave(stats: &mut GameStats, weather: &mut WeatherState) {
+pub fn start_wave(stats: &mut GameStats, weather: &mut WeatherState, audio: &AudioEngine) {
     stats.wave += 1;
     let n = stats.wave;
     stats.zombie_speed = (2.2 + (n - 1) as f32 * 0.2).min(5.2);
@@ -20,12 +21,17 @@ pub fn start_wave(stats: &mut GameStats, weather: &mut WeatherState) {
     stats.spawn_timer = 0.0;
     stats.intermission = 0.0;
     weather.target = storm_for(n);
+    audio.wave_start(n);
 }
 
-pub fn start_first_wave(mut stats: ResMut<GameStats>, mut weather: ResMut<WeatherState>) {
+pub fn start_first_wave(
+    mut stats: ResMut<GameStats>,
+    mut weather: ResMut<WeatherState>,
+    audio: Res<AudioEngine>,
+) {
     *stats = GameStats::default();
     weather.set(0.0);
-    start_wave(&mut stats, &mut weather);
+    start_wave(&mut stats, &mut weather, &audio);
 }
 
 fn spawn_point(player_pos: Vec3) -> Vec3 {
@@ -53,6 +59,7 @@ pub fn wave_spawner(
     mut weather: ResMut<WeatherState>,
     mut picker: ResMut<UpgradePicker>,
     mut next_state: ResMut<NextState<GameState>>,
+    audio: Res<AudioEngine>,
     zombie_assets: Res<ZombieAssets>,
     player_q: Query<&Transform>,
     live_zombies: Query<Entity, (With<Zombie>, Without<Corpse>)>,
@@ -70,7 +77,7 @@ pub fn wave_spawner(
             stats.hp = (stats.hp + 1).min(stats.max_hp);
             picker.open(&stats);
             if picker.choices.is_empty() {
-                start_wave(&mut stats, &mut weather);
+                start_wave(&mut stats, &mut weather, &audio);
             } else {
                 next_state.set(GameState::ChoosingUpgrade);
             }
@@ -107,6 +114,7 @@ pub fn wave_spawner(
         }
     } else if alive == 0 {
         stats.intermission = 1.6;
+        audio.wave_clear();
     }
 }
 
@@ -126,9 +134,11 @@ pub fn pause_toggle(
 
 pub fn check_player_death(
     stats: Res<GameStats>,
+    audio: Res<AudioEngine>,
     mut next_state: ResMut<NextState<GameState>>,
 ) {
     if stats.hp <= 0 {
+        audio.death();
         next_state.set(GameState::Dead);
     }
 }

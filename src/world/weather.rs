@@ -5,6 +5,7 @@ use bevy::prelude::*;
 use rand::RngExt;
 use std::f32::consts::FRAC_PI_2;
 
+use crate::audio::AudioEngine;
 use crate::core::state::{GameState, GameStats};
 use crate::entities::player::PlayerRig;
 
@@ -166,6 +167,7 @@ pub fn update_weather(
     mut fog_q: Query<&mut DistanceFog>,
     mut transforms: Query<&mut Transform>,
     mut visibilities: Query<&mut Visibility>,
+    audio: Res<AudioEngine>,
     _stats: Res<GameStats>,
 ) {
     let dt = time.delta_secs();
@@ -262,6 +264,7 @@ pub fn update_weather(
             let k = ((l - BOLT_LEVEL) / (1.0 - BOLT_LEVEL)).clamp(0.0, 1.0);
             let base = 16.0 + (3.5 - 16.0) * k;
             weather.next_bolt = base * (0.6 + rng.random::<f32>() * 0.8);
+            audio.thunder(k);
         }
     }
 

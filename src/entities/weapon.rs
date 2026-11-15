@@ -2,6 +2,7 @@ use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 use std::collections::HashSet;
 
+use crate::audio::AudioEngine;
 use crate::core::state::{AimState, GameStats};
 use crate::effects::blood::{BloodAssets, spawn_blood};
 use crate::effects::debris::DebrisAssets;
@@ -106,6 +107,7 @@ pub fn weapon_input_and_fire(
     aim_state: Res<AimState>,
     bullet_assets: Res<BulletAssets>,
     debris_assets: Res<DebrisAssets>,
+    audio: Res<AudioEngine>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     global_transforms: Query<&GlobalTransform>,
     mut transforms: Query<&mut Transform>,
@@ -118,6 +120,7 @@ pub fn weapon_input_and_fire(
     if keys.just_pressed(KeyCode::KeyR) && !stats.reloading && stats.mag < stats.mag_size {
         stats.reloading = true;
         stats.reload_t = 0.0;
+        audio.reload_out();
     }
 
     if stats.reloading {
@@ -126,6 +129,7 @@ pub fn weapon_input_and_fire(
             stats.reloading = false;
             stats.reload_t = 0.0;
             stats.mag = stats.mag_size;
+            audio.reload_in();
         }
     }
 
@@ -140,6 +144,7 @@ pub fn weapon_input_and_fire(
             if stats.mag <= 0 {
                 stats.reloading = true;
                 stats.reload_t = 0.0;
+                audio.reload_out();
             }
         }
         stats.shots += 1;
@@ -162,6 +167,7 @@ pub fn weapon_input_and_fire(
                 .unwrap_or(p_pos + Vec3::new(0.0, 1.38, 0.0));
             let count = 1 + stats.spread;
             let hot = stats.p_damage > 0.0;
+            audio.shot(hot, stats.spread > 0);
             for k in 0..count {
                 let a = (k as f32 - (count - 1) as f32 * 0.5) * 0.13;
                 let (s, c) = a.sin_cos();
@@ -183,6 +189,15 @@ pub fn weapon_input_and_fire(
     }
 }
 
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct BulletHitRes<'w> {
+    debris_assets: Res<'w, DebrisAssets>,
+    blood_assets: Res<'w, BloodAssets>,
+    zombie_assets: Res<'w, ZombieAssets>,
+    drop_assets: Res<'w, DropAssets>,
+    audio: Res<'w, AudioEngine>,
+}
+
 pub fn update_bullets(
     mut commands: Commands,
     time: Res<Time>,
@@ -190,10 +205,7 @@ pub fn update_bullets(
     mut stats: ResMut<GameStats>,
     wall_boxes: Res<WallBoxes>,
     mut openings: ResMut<Openings>,
-    debris_assets: Res<DebrisAssets>,
-    blood_assets: Res<BloodAssets>,
-    zombie_assets: Res<ZombieAssets>,
-    drop_assets: Res<DropAssets>,
+    res: BulletHitRes,
     mut bullets: Query<(Entity, &mut Transform, &mut Bullet)>,
     mut zombies: Query<(Entity, &mut Transform, &mut Zombie, &mut ZombieAnim), Without<Bullet>>,
     corpses_q: Query<(Entity, &Corpse)>,
@@ -234,12 +246,13 @@ pub fn update_bullets(
                     if o.kind == OpeningKind::Door {
                         hit = true;
                         o.jolt = 0.4;
-                        burst(o, 1, false, 0.08, 1.5, &mut commands, &debris_assets);
+                        burst(o, 1, false, 0.08, 1.5, &mut commands, &res.debris_assets);
                     } else {
+                        res.audio.shatter(Vec3::new(o.x, 0.0, o.z));
                         break_opening(
                             o,
                             &mut commands,
-                            &debris_assets,
+                            &res.debris_assets,
                             &mut visibilities,
                         );
                     }
@@ -266,15 +279,17 @@ pub fn update_bullets(
                     z_anim.flinch = 1.0;
                     for &m in &z_state.body {
                         if let Ok(mut mat) = mats.get_mut(m) {
-                            mat.0 = zombie_assets.hurt_mat.clone();
+                            mat.0 = res.zombie_assets.hurt_mat.clone();
                         }
                     }
                     z_tf.translation += b.dir * 0.25;
-                    spawn_blood(&mut commands, &blood_assets, z_tf.translation);
+                    spawn_blood(&mut commands, &res.blood_assets, z_tf.translation);
+                    res.audio.hit(z_tf.translation);
 
                     if z_state.hp <= 0.0 {
+                        res.audio.zdeath(z_tf.translation);
                         stats.kills += 1;
-                        maybe_drop(&mut commands, &mut stats, &drop_assets, z_tf.translation);
+                        maybe_drop(&mut commands, &mut stats, &res.drop_assets, z_tf.translation);
                         zombie_dies(
                             z_ent,
                             &z_tf,
@@ -283,7 +298,7 @@ pub fn update_bullets(
                             Some(b.dir),
                             player_pos,
                             &mut commands,
-                            &zombie_assets,
+                            &res.zombie_assets,
                             &mut openings,
                             &corpses_q,
                             &mut mats,

@@ -1,3 +1,4 @@
+mod audio;
 mod core;
 mod effects;
 mod entities;
@@ -7,6 +8,8 @@ mod world;
 
 use bevy::prelude::*;
 use rand::RngExt;
+
+use audio::{setup_audio, sync_audio_state};
 
 use core::state::{AimState, GameState, GameStats, ToastState};
 use effects::blood::{setup_blood_assets, update_blood_particles};
@@ -57,6 +60,7 @@ fn main() {
         .add_systems(
             Startup,
             (
+                setup_audio,
                 setup_basic_camera,
                 setup_world,
                 setup_player,
@@ -66,13 +70,14 @@ fn main() {
                 setup_debris_assets,
                 setup_drop_assets,
                 setup_weather,
-                start_first_wave.after(setup_weather),
+                start_first_wave.after(setup_weather).after(setup_audio),
             ),
         )
         .add_systems(
             Update,
             (
                 pause_toggle,
+                sync_audio_state,
                 update_world,
                 update_weather,
                 update_camera,

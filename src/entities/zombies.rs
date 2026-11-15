@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use rand::RngExt;
 use std::f32::consts::{PI, TAU};
 
+use crate::audio::AudioEngine;
 use crate::core::blocks::{BlockSpec, bake_blocks};
 use crate::core::math::{SeededRng, damp, ease, wrap_a};
 use crate::core::state::GameStats;
@@ -1005,6 +1006,7 @@ pub fn chase_zombies(
     mut openings: ResMut<Openings>,
     debris_assets: Res<DebrisAssets>,
     zombie_assets: Res<ZombieAssets>,
+    audio: Res<AudioEngine>,
     mut zombies: Query<(Entity, &mut Zombie, &mut ZombieAnim)>,
     mut transforms: Query<&mut Transform>,
     mut mats: Query<&mut MeshMaterial3d<StandardMaterial>>,
@@ -1036,6 +1038,10 @@ pub fn chase_zombies(
         let Ok(mut z_tf) = transforms.get_mut(z_ent) else {
             continue;
         };
+        if anim.groan < 0.05 && rng.random::<f32>() < dt * 0.08 {
+            anim.groan = 1.0;
+            audio.groan(z_tf.translation);
+        }
         let pdx = p_pos.x - z_tf.translation.x;
         let pdz = p_pos.z - z_tf.translation.z;
         let pd = pdx.hypot(pdz);
@@ -1084,16 +1090,21 @@ pub fn chase_zombies(
                         &mut openings,
                         &mut commands,
                         &debris_assets,
+                        &audio,
                         &mut mats,
                         &mut visibilities,
                     );
-                } else if pd < Z_HIT_RANGE
-                    && !wall_between(z_tf.translation, p_pos, &wall_boxes, &openings)
-                    && stats.dmg_cd <= 0.0
-                {
-                    stats.hp -= 1;
-                    stats.dmg_cd = HURT_IFRAMES;
-                    stats.shake = stats.shake.max(0.45);
+                } else {
+                    audio.swipe(z_tf.translation);
+                    if pd < Z_HIT_RANGE
+                        && !wall_between(z_tf.translation, p_pos, &wall_boxes, &openings)
+                        && stats.dmg_cd <= 0.0
+                    {
+                        stats.hp -= 1;
+                        stats.dmg_cd = HURT_IFRAMES;
+                        stats.shake = stats.shake.max(0.45);
+                        audio.hurt();
+                    }
                 }
             }
             if anim.swing >= Z_SWING {

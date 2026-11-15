@@ -4,6 +4,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use rand::RngExt;
 
+use crate::audio::AudioEngine;
 use crate::core::blocks::{BlockSpec, bake_blocks};
 use crate::core::math::SeededRng;
 use crate::core::state::{GameStats, ToastState};
@@ -238,6 +239,7 @@ pub fn update_drops(
     rig: Res<PlayerRig>,
     mut stats: ResMut<GameStats>,
     mut toast: ResMut<ToastState>,
+    audio: Res<AudioEngine>,
     player_q: Query<&Transform, Without<DropItem>>,
     mut drops: Query<(Entity, &mut Transform, &mut Visibility, &mut DropItem)>,
 ) {
@@ -256,6 +258,7 @@ pub fn update_drops(
         let dist = dx.hypot(dz);
 
         if dist < 0.9 {
+            audio.pickup(d.kind);
             toast.text = d.kind.name().to_string();
             toast.color = d.kind.color();
             toast.timer = 2.0;

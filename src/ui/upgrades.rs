@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 use rand::seq::SliceRandom;
 
+use crate::audio::AudioEngine;
 use crate::core::state::{GameState, GameStats};
 use crate::entities::drops::DROP_CHANCE;
 use crate::world::weather::WeatherState;
@@ -207,7 +208,7 @@ impl UpgradePicker {
         self.picked = None;
     }
 
-    pub fn pick(&mut self, slot: usize, stats: &mut GameStats) {
+    pub fn pick(&mut self, slot: usize, stats: &mut GameStats, audio: &AudioEngine) {
         if self.lockout > 0.0 || self.picked.is_some() {
             return;
         }
@@ -217,6 +218,7 @@ impl UpgradePicker {
         let u = &UPGRADES[idx];
         (u.apply)(stats);
         *stats.upgrades.entry(u.id.to_string()).or_insert(0) += 1;
+        audio.upgrade(u.cat);
         self.picked = Some(slot);
         self.confirm_timer = 0.48;
     }
@@ -229,6 +231,7 @@ pub fn update_upgrade_picker_timer(
     mut stats: ResMut<GameStats>,
     mut weather: ResMut<WeatherState>,
     mut next_state: ResMut<NextState<GameState>>,
+    audio: Res<AudioEngine>,
 ) {
     let dt = time.delta_secs();
     if picker.lockout > 0.0 {
@@ -246,7 +249,7 @@ pub fn update_upgrade_picker_timer(
             None
         };
         if let Some(s) = slot {
-            picker.pick(s, &mut stats);
+            picker.pick(s, &mut stats, &audio);
         }
     }
 
@@ -254,7 +257,7 @@ pub fn update_upgrade_picker_timer(
         picker.confirm_timer -= dt;
         if picker.confirm_timer <= 0.0 {
             picker.confirm_timer = -1.0;
-            crate::game::start_wave(&mut stats, &mut weather);
+            crate::game::start_wave(&mut stats, &mut weather, &audio);
             next_state.set(GameState::Playing);
         }
     }

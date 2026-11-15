@@ -6,6 +6,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use rand::RngExt;
 use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
 
+use crate::audio::AudioEngine;
 use crate::core::blocks::bevel_box_raw;
 use crate::core::math::{damp, ease, wrap_a};
 use crate::core::state::{AimState, GameStats};
@@ -803,6 +804,7 @@ pub fn animate_player(
     mut visibilities: Query<&mut Visibility>,
     mut lights: Query<&mut PointLight>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    audio: Res<AudioEngine>,
 ) {
     let dt = time.delta_secs();
     let mx = st.vel.x;
@@ -855,7 +857,12 @@ pub fn animate_player(
     let drive = st.gait.max(st.turn_w * 0.7);
     let freq = 2.45 * (st.speed / PLAYER_SPEED).sqrt();
     if drive > 0.02 {
+        let prev_half = (st.phase * 2.0) as i32;
         st.phase = (st.phase + freq * dt) % 1.0;
+        let next_half = (st.phase * 2.0) as i32;
+        if moving && next_half != prev_half {
+            audio.step();
+        }
     }
     let ph = st.phase * TAU;
     let stride_len = (st.speed * BETA / freq).min(0.86) * st.gait;
