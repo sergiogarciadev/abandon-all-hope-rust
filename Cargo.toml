@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 bevy = { version = "0.20.1", features = ["debug"] }
+ab_glyph = "0.2.32"
 rand = "0.10.3"
 rodio = "0.22.2"
 

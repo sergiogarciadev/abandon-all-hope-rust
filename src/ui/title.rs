@@ -2,6 +2,7 @@
 
 use std::f32::consts::FRAC_PI_2;
 
+use ab_glyph::{Font as _, FontRef, PxScale, ScaleFont as _, point};
 use bevy::asset::RenderAssetUsages;
 use bevy::ecs::system::SystemParam;
 use bevy::image::{ImageSampler, ImageSamplerDescriptor};
@@ -186,6 +187,161 @@ fn make_scrim_image() -> Image {
     img
 }
 
+fn hash_2d(ix: i32, iy: i32, seed: u32) -> f32 {
+    let mut h = (ix as u32).wrapping_mul(374761393)
+        ^ (iy as u32).wrapping_mul(668265263)
+        ^ seed.wrapping_mul(1442695041);
+    h = (h ^ (h >> 13)).wrapping_mul(1274126177);
+    (h ^ (h >> 16)) as f32 / u32::MAX as f32
+}
+
+fn value_noise_2d(x: f32, y: f32, seed: u32) -> f32 {
+    let ix = x.floor() as i32;
+    let iy = y.floor() as i32;
+    let fx = x - ix as f32;
+    let fy = y - iy as f32;
+    let ux = fx * fx * (3.0 - 2.0 * fx);
+    let uy = fy * fy * (3.0 - 2.0 * fy);
+    let a = hash_2d(ix, iy, seed);
+    let b = hash_2d(ix + 1, iy, seed);
+    let c = hash_2d(ix, iy + 1, seed);
+    let d = hash_2d(ix + 1, iy + 1, seed);
+    let top = a + (b - a) * ux;
+    let bot = c + (d - c) * ux;
+    top + (bot - top) * uy
+}
+
+/// 4-octave fractal noise mask matching CSS `.distressed` (`baseFrequency='.03' numOctaves='4'`, `a' = -9*a + 6.58`).
+fn distressed_mask(x: f32, y: f32, seed: u32) -> f32 {
+    let mut sum = 0.0;
+    let mut amp = 1.0;
+    let mut freq = 0.03;
+    let mut norm = 0.0;
+    for oct in 0..4u32 {
+        sum += value_noise_2d(x * freq, y * freq, seed.wrapping_add(oct * 97)) * amp;
+        norm += amp;
+        freq *= 2.0;
+        amp *= 0.5;
+    }
+    let n = ((sum / norm - 0.5) * 1.45 + 0.5).clamp(0.0, 1.0);
+    (-9.0 * n + 6.58).clamp(0.0, 1.0)
+}
+
+/// Rasterizes a static title string with drop-shadow and per-pixel fractal-noise alpha cutouts,
+/// so chipped-paint holes only appear inside the glyphs with zero bounding-box artifacts.
+fn render_distressed_text(
+    font_bytes: &[u8],
+    text: &str,
+    font_size: f32,
+    letter_spacing: f32,
+    rgb: [u8; 3],
+    shadow_dy: usize,
+    seed: u32,
+) -> (Image, u32, u32) {
+    let Ok(font) = FontRef::try_from_slice(font_bytes) else {
+        let img = Image::new(
+            Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            vec![0, 0, 0, 0],
+            TextureFormat::Rgba8UnormSrgb,
+            RenderAssetUsages::RENDER_WORLD,
+        );
+        return (img, 1, 1);
+    };
+    let scaled = font.as_scaled(PxScale::from(font_size));
+    let mut caret_x = 0.0f32;
+    let mut prev_id = None;
+    let mut glyphs = Vec::new();
+
+    for ch in text.chars() {
+        let id = scaled.glyph_id(ch);
+        if let Some(prev) = prev_id {
+            caret_x += scaled.kern(prev, id);
+        }
+        let g = id.with_scale_and_position(PxScale::from(font_size), point(caret_x, scaled.ascent()));
+        caret_x += scaled.h_advance(id) + letter_spacing;
+        prev_id = Some(id);
+        if let Some(outlined) = font.outline_glyph(g) {
+            glyphs.push(outlined);
+        }
+    }
+
+    let mut min_x = f32::MAX;
+    let mut min_y = f32::MAX;
+    let mut max_x = f32::MIN;
+    let mut max_y = f32::MIN;
+    for g in &glyphs {
+        let b = g.px_bounds();
+        min_x = min_x.min(b.min.x);
+        min_y = min_y.min(b.min.y);
+        max_x = max_x.max(b.max.x);
+        max_y = max_y.max(b.max.y);
+    }
+
+    let pad = 2i32;
+    let ox = min_x.floor() as i32 - pad;
+    let oy = min_y.floor() as i32 - pad;
+    let w = ((max_x.ceil() as i32 - ox + pad).max(1)) as usize;
+    let h = ((max_y.ceil() as i32 - oy + pad + shadow_dy as i32).max(1)) as usize;
+
+    let mut glyph_alpha = vec![0.0f32; w * h];
+    for g in glyphs {
+        let b = g.px_bounds();
+        let gx0 = b.min.x.floor() as i32 - ox;
+        let gy0 = b.min.y.floor() as i32 - oy;
+        g.draw(|lx, ly, cov| {
+            let px = gx0 + lx as i32;
+            let py = gy0 + ly as i32;
+            if px >= 0 && py >= 0 && (px as usize) < w && (py as usize) < h {
+                let idx = py as usize * w + px as usize;
+                glyph_alpha[idx] = (glyph_alpha[idx] + cov).min(1.0);
+            }
+        });
+    }
+
+    let mut data = Vec::with_capacity(w * h * 4);
+    for y in 0..h {
+        for x in 0..w {
+            let fg_a = glyph_alpha[y * w + x];
+            let sh_a = if y >= shadow_dy {
+                glyph_alpha[(y - shadow_dy) * w + x]
+            } else {
+                0.0
+            };
+            let out_a = fg_a + sh_a * (1.0 - fg_a);
+            if out_a <= 0.0 {
+                data.extend_from_slice(&[0, 0, 0, 0]);
+            } else {
+                let mask = distressed_mask(x as f32, y as f32, seed);
+                let final_a = (out_a * mask).clamp(0.0, 1.0);
+                let fg_w = fg_a / out_a;
+                let r = (rgb[0] as f32 * fg_w).round() as u8;
+                let g = (rgb[1] as f32 * fg_w).round() as u8;
+                let b = (rgb[2] as f32 * fg_w).round() as u8;
+                data.extend_from_slice(&[r, g, b, (final_a * 255.0).round() as u8]);
+            }
+        }
+    }
+
+    let mut img = Image::new(
+        Extent3d {
+            width: w as u32,
+            height: h as u32,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        data,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    img.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor::linear());
+    (img, w as u32, h as u32)
+}
+
 pub fn spawn_title_zombies(
     mut commands: Commands,
     zombie_assets: Option<Res<ZombieAssets>>,
@@ -314,10 +470,33 @@ pub fn wander_title_zombies(
     }
 }
 
-pub fn setup_title_ui(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
+pub fn setup_title_ui(
+    mut commands: Commands,
+    mut images: ResMut<Assets<Image>>,
+    fonts: Res<Assets<Font>>,
+) {
     let grain_handle = images.add(make_grain_image());
     let scrim_handle = images.add(make_scrim_image());
     commands.insert_resource(GrainImage(grain_handle.clone()));
+
+    let font_bytes = fonts
+        .get(&Handle::<Font>::default())
+        .map(|f| f.data.as_ref())
+        .unwrap_or(&[]);
+    let mut make_title_img =
+        |text: &str, size: f32, spacing: f32, rgb: [u8; 3], shadow_dy: usize, seed: u32| {
+            let (img, w, h) =
+                render_distressed_text(font_bytes, text, size, spacing, rgb, shadow_dy, seed);
+            (images.add(img), w as f32, h as f32)
+        };
+    let (abandon_img, abandon_w, abandon_h) =
+        make_title_img("ABANDON", 40.0, 4.0, [0xe9, 0xe2, 0xd6], 4, 4);
+    let (all_hope_img, all_hope_w, all_hope_h) =
+        make_title_img("ALL HOPE", 104.0, 2.0, [0xd6, 0x45, 0x3c], 5, 11);
+    let (paused_img, paused_w, paused_h) =
+        make_title_img("PAUSED", 82.0, 5.0, [0xe9, 0xe2, 0xd6], 4, 23);
+    let (died_img, died_w, died_h) =
+        make_title_img("YOU DIED", 92.0, 5.0, [0xb8, 0x33, 0x2b], 4, 37);
 
     // Startup fade-in overlay
     commands.spawn((
@@ -399,28 +578,20 @@ pub fn setup_title_ui(mut commands: Commands, mut images: ResMut<Assets<Image>>)
             })
             .with_children(|col| {
                 col.spawn((
-                    Text::new("ABANDON"),
-                    TextFont {
-                        font_size: FontSize::Px(40.0),
+                    Node {
+                        width: Val::Px(abandon_w),
+                        height: Val::Px(abandon_h),
                         ..default()
                     },
-                    TextColor(Color::srgb_u8(0xe9, 0xe2, 0xd6)),
-                    TextShadow {
-                        offset: Vec2::new(0.0, 4.0),
-                        color: Color::BLACK,
-                    },
+                    ImageNode::new(abandon_img),
                 ));
                 col.spawn((
-                    Text::new("ALL HOPE"),
-                    TextFont {
-                        font_size: FontSize::Px(104.0),
+                    Node {
+                        width: Val::Px(all_hope_w),
+                        height: Val::Px(all_hope_h),
                         ..default()
                     },
-                    TextColor(Color::srgb_u8(0xd6, 0x45, 0x3c)),
-                    TextShadow {
-                        offset: Vec2::new(0.0, 5.0),
-                        color: Color::BLACK,
-                    },
+                    ImageNode::new(all_hope_img),
                 ));
                 col.spawn((
                     SplashPrompt,
@@ -665,16 +836,12 @@ pub fn setup_title_ui(mut commands: Commands, mut images: ResMut<Assets<Image>>)
         ))
         .with_children(|p| {
             p.spawn((
-                Text::new("PAUSED"),
-                TextFont {
-                    font_size: FontSize::Px(82.0),
+                Node {
+                    width: Val::Px(paused_w),
+                    height: Val::Px(paused_h),
                     ..default()
                 },
-                TextColor(Color::srgb_u8(0xe9, 0xe2, 0xd6)),
-                TextShadow {
-                    offset: Vec2::new(0.0, 4.0),
-                    color: Color::BLACK,
-                },
+                ImageNode::new(paused_img),
             ));
             p.spawn((
                 PauseStatText,
@@ -727,16 +894,12 @@ pub fn setup_title_ui(mut commands: Commands, mut images: ResMut<Assets<Image>>)
         ))
         .with_children(|d| {
             d.spawn((
-                Text::new("YOU DIED"),
-                TextFont {
-                    font_size: FontSize::Px(92.0),
+                Node {
+                    width: Val::Px(died_w),
+                    height: Val::Px(died_h),
                     ..default()
                 },
-                TextColor(Color::srgb_u8(0xb8, 0x33, 0x2b)),
-                TextShadow {
-                    offset: Vec2::new(0.0, 4.0),
-                    color: Color::BLACK,
-                },
+                ImageNode::new(died_img),
             ));
             d.spawn((
                 DeathStatText,
