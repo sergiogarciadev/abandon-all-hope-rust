@@ -158,10 +158,13 @@ fn make_grain_image() -> Image {
 
 pub fn spawn_title_zombies(
     mut commands: Commands,
-    zombie_assets: Res<ZombieAssets>,
+    zombie_assets: Option<Res<ZombieAssets>>,
     solids: Res<SolidsNav>,
     existing: Query<Entity, With<TitleZombie>>,
 ) {
+    let Some(zombie_assets) = zombie_assets else {
+        return;
+    };
     if !existing.is_empty() {
         return;
     }
