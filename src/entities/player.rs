@@ -3,18 +3,87 @@ use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerD
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-use std::f32::consts::{FRAC_PI_2, FRAC_PI_4};
+use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI, TAU};
 
 use crate::core::blocks::bevel_box_raw;
+use crate::core::math::{damp, ease, wrap_a};
+
+use super::animation::{bone_transform, foot_cycle, ik2};
 
 pub const THIGH: f32 = 0.44;
 pub const SHIN: f32 = 0.42;
-#[allow(dead_code)]
 pub const ANKLE_H: f32 = 0.15;
-#[allow(dead_code)]
 pub const HIP_H: f32 = 0.97;
 pub const UPPER_ARM: f32 = 0.42;
 pub const FOREARM: f32 = 0.42;
+
+const BETA: f32 = 0.38;
+const HIP_MAX: f32 = 1.0;
+const IDLE_HIP: f32 = -0.35;
+const BLADE: f32 = -0.62;
+const POCKET: Vec3 = Vec3::new(-0.13, 0.6, 0.22);
+const POUCH: Vec3 = Vec3::new(0.17, 0.33, 0.36);
+const KNEE_POLE: Vec3 = Vec3::Z;
+const PLAYER_SPEED: f32 = 6.2;
+
+const GRIP_R: Vec3 = Vec3::new(0.0, -0.1, 0.3);
+const GRIP_L: Vec3 = Vec3::new(0.0, -0.07, 0.74);
+const MAG_Y: f32 = -0.14;
+const MAG_BASE: Vec3 = Vec3::new(0.0, -0.29, 0.53);
+const MAG_OUT: Vec3 = Vec3::new(0.0, -0.53, 0.53);
+const MAG_LINEUP: Vec3 = Vec3::new(0.0, -0.49, 0.53);
+
+#[derive(Resource)]
+#[allow(dead_code)]
+pub struct PlayerRigState {
+    pub phase: f32,
+    pub gait: f32,
+    pub turn_w: f32,
+    pub turning: bool,
+    pub hip_yaw: f32,
+    pub back: bool,
+    pub stride: Vec3,
+    pub lean_f: f32,
+    pub lean_s: f32,
+    pub kick: f32,
+    pub flash: f32,
+    pub flash_peak: f32,
+    pub reload: f32,
+    pub mag_dropped: bool,
+    pub t: f32,
+    pub vel: Vec2,
+    pub speed: f32,
+    pub reloading: bool,
+    pub reload_t: f32,
+    pub reload_time: f32,
+}
+
+impl Default for PlayerRigState {
+    fn default() -> Self {
+        Self {
+            phase: 0.0,
+            gait: 0.0,
+            turn_w: 0.0,
+            turning: false,
+            hip_yaw: 0.0,
+            back: false,
+            stride: Vec3::Z,
+            lean_f: 0.0,
+            lean_s: 0.0,
+            kick: 0.0,
+            flash: 0.0,
+            flash_peak: 0.0,
+            reload: 0.0,
+            mag_dropped: false,
+            t: 0.0,
+            vel: Vec2::ZERO,
+            speed: PLAYER_SPEED,
+            reloading: false,
+            reload_t: 0.0,
+            reload_time: 1.2,
+        }
+    }
+}
 
 #[allow(dead_code)]
 pub struct LegRig {
@@ -509,4 +578,302 @@ pub fn setup_player(
         flash_fire_mat,
         flash_glow_mat,
     });
+}
+
+enum ReloadSpace {
+    Gun,
+    Upper,
+}
+
+const RELOAD_PATH: [(f32, Vec3, ReloadSpace); 7] = [
+    (0.0, GRIP_L, ReloadSpace::Gun),
+    (0.12, MAG_BASE, ReloadSpace::Gun),
+    (0.22, MAG_OUT, ReloadSpace::Gun),
+    (0.45, POUCH, ReloadSpace::Upper),
+    (0.55, POUCH, ReloadSpace::Upper),
+    (0.78, MAG_LINEUP, ReloadSpace::Gun),
+    (0.95, MAG_BASE, ReloadSpace::Gun),
+];
+
+fn reload_hand(u: f32, gun_m: Mat4, upper_m: Mat4) -> Vec3 {
+    let at = |k: usize| -> Vec3 {
+        let (_, pt, ref space) = RELOAD_PATH[k];
+        match space {
+            ReloadSpace::Gun => gun_m.transform_point3(pt),
+            ReloadSpace::Upper => upper_m.transform_point3(pt),
+        }
+    };
+    let mut i = RELOAD_PATH.len() - 1;
+    while i > 0 && u < RELOAD_PATH[i].0 {
+        i -= 1;
+    }
+    if i == RELOAD_PATH.len() - 1 {
+        return at(i);
+    }
+    let t = (u - RELOAD_PATH[i].0) / (RELOAD_PATH[i + 1].0 - RELOAD_PATH[i].0);
+    at(i).lerp(at(i + 1), ease(t))
+}
+
+/// Temporary WASD + R movement/reload test driver for Step 4 animation verification.
+pub fn demo_player_movement(
+    time: Res<Time>,
+    keys: Res<ButtonInput<KeyCode>>,
+    rig: Res<PlayerRig>,
+    mut state: ResMut<PlayerRigState>,
+    mut transforms: Query<&mut Transform>,
+) {
+    let dt = time.delta_secs();
+    let mut dir = Vec2::ZERO;
+    if keys.pressed(KeyCode::KeyW) || keys.pressed(KeyCode::ArrowUp) {
+        dir.y -= 1.0;
+    }
+    if keys.pressed(KeyCode::KeyS) || keys.pressed(KeyCode::ArrowDown) {
+        dir.y += 1.0;
+    }
+    if keys.pressed(KeyCode::KeyA) || keys.pressed(KeyCode::ArrowLeft) {
+        dir.x -= 1.0;
+    }
+    if keys.pressed(KeyCode::KeyD) || keys.pressed(KeyCode::ArrowRight) {
+        dir.x += 1.0;
+    }
+    let move_dir = dir.normalize_or_zero();
+    state.vel = move_dir * state.speed;
+
+    if keys.just_pressed(KeyCode::KeyR) && !state.reloading {
+        state.reloading = true;
+        state.reload_t = 0.0;
+    }
+    if state.reloading {
+        state.reload_t += dt;
+        if state.reload_t >= state.reload_time {
+            state.reloading = false;
+            state.reload_t = 0.0;
+        }
+    }
+
+    if let Ok(mut tf) = transforms.get_mut(rig.root) {
+        tf.translation.x = (tf.translation.x + state.vel.x * dt).clamp(-9.0, 9.0);
+        tf.translation.z = (tf.translation.z + state.vel.y * dt).clamp(-9.0, 9.0);
+        if move_dir.length_squared() > 0.01 {
+            let target_yaw = move_dir.x.atan2(move_dir.y);
+            let (_, cur_yaw, _) = tf.rotation.to_euler(EulerRot::YXZ);
+            let next_yaw = wrap_a(cur_yaw + wrap_a(target_yaw - cur_yaw) * (1.0 - (-10.0 * dt).exp()));
+            tf.rotation = Quat::from_rotation_y(next_yaw);
+        }
+    }
+}
+
+/// Poses the survivor's hierarchical rig every frame using 2-bone IK and gait cycles.
+pub fn animate_player(
+    time: Res<Time>,
+    rig: Res<PlayerRig>,
+    mut st: ResMut<PlayerRigState>,
+    mut transforms: Query<&mut Transform>,
+    mut visibilities: Query<&mut Visibility>,
+) {
+    let dt = time.delta_secs();
+    let mx = st.vel.x;
+    let mz = st.vel.y;
+    let pace = (mx.hypot(mz) / st.speed).min(1.0);
+    let moving = pace > 0.05;
+
+    let aim = transforms
+        .get(rig.root)
+        .map(|t| t.rotation.to_euler(EulerRot::YXZ).1)
+        .unwrap_or(0.0);
+
+    st.t += dt;
+    st.gait = damp(st.gait, pace, if moving { 9.0 } else { 7.0 }, dt);
+
+    let move_yaw = mx.atan2(mz);
+    let mut hip_target = st.hip_yaw;
+    if moving {
+        let rel = wrap_a(move_yaw - aim);
+        if if st.back { rel.abs() < 1.25 } else { rel.abs() > 1.9 } {
+            st.back = !st.back;
+        }
+        let offset = if st.back { wrap_a(rel - PI) } else { rel }.clamp(-HIP_MAX, HIP_MAX);
+        hip_target = aim + offset;
+        st.turning = false;
+    } else {
+        let idle = aim + IDLE_HIP;
+        if wrap_a(idle - st.hip_yaw).abs() > 0.8 {
+            st.turning = true;
+        }
+        if st.turning {
+            hip_target = idle;
+            if wrap_a(idle - st.hip_yaw).abs() < 0.06 {
+                st.turning = false;
+            }
+        }
+    }
+
+    st.hip_yaw = wrap_a(st.hip_yaw + wrap_a(hip_target - st.hip_yaw) * (1.0 - (-10.0 * dt).exp()));
+    let hip_rel = wrap_a(st.hip_yaw - aim);
+    if let Ok(mut tf) = transforms.get_mut(rig.lower) {
+        tf.rotation = Quat::from_rotation_y(hip_rel);
+    }
+    if moving {
+        let s = move_yaw - st.hip_yaw;
+        st.stride = Vec3::new(s.sin(), 0.0, s.cos());
+    }
+
+    st.turn_w = damp(st.turn_w, if st.turning { 1.0 } else { 0.0 }, 12.0, dt);
+    let drive = st.gait.max(st.turn_w * 0.7);
+    let freq = 2.45 * (st.speed / PLAYER_SPEED).sqrt();
+    if drive > 0.02 {
+        st.phase = (st.phase + freq * dt) % 1.0;
+    }
+    let ph = st.phase * TAU;
+    let stride_len = (st.speed * BETA / freq).min(0.86) * st.gait;
+    let lift_h = 0.2 * st.gait + 0.1 * st.turn_w;
+
+    let bob = -0.04 * st.gait * (2.0 * (ph - PI * BETA)).cos();
+    let pelvis_y = HIP_H - 0.11 * st.gait + bob;
+    let pelvis_rot = Quat::from_euler(
+        EulerRot::YXZ,
+        0.14 * st.gait * ph.sin() * st.stride.z,
+        0.0,
+        0.05 * st.gait * ph.sin(),
+    );
+    let pelvis_m = Mat4::from_rotation_translation(pelvis_rot, Vec3::new(0.0, pelvis_y, 0.0));
+    if let Ok(mut tf) = transforms.get_mut(rig.pelvis) {
+        tf.translation.y = pelvis_y;
+        tf.rotation = pelvis_rot;
+    }
+
+    // Legs
+    for (i, leg) in rig.legs.iter().enumerate() {
+        let p = (st.phase + i as f32 * 0.5) % 1.0;
+        let fc = foot_cycle(p, BETA);
+        let rest_z = if leg.side > 0.0 { 0.12 } else { -0.1 };
+        let foot = Vec3::new(
+            leg.side * (0.17 + 0.03 * (1.0 - st.gait)),
+            ANKLE_H + fc.lift * lift_h,
+            rest_z * (1.0 - st.gait),
+        ) + st.stride * (fc.s * stride_len);
+
+        let hip_p = pelvis_m.transform_point3(leg.hip);
+        let knee = ik2(hip_p, foot, THIGH, SHIN, KNEE_POLE);
+        let ankle = knee + (foot - knee).normalize_or_zero() * SHIN;
+
+        if let Ok(mut tf) = transforms.get_mut(leg.thigh) {
+            *tf = bone_transform(hip_p, knee, KNEE_POLE);
+        }
+        if let Ok(mut tf) = transforms.get_mut(leg.shin) {
+            *tf = bone_transform(knee, ankle, KNEE_POLE);
+        }
+        if let Ok(mut tf) = transforms.get_mut(leg.boot) {
+            tf.translation = ankle;
+            let sgn = if st.stride.z == 0.0 { 1.0 } else { st.stride.z.signum() };
+            tf.rotation = Quat::from_euler(EulerRot::YXZ, leg.side * 0.08, fc.pitch * st.gait * sgn, 0.0);
+        }
+    }
+
+    // Upper body
+    let breathe = (st.t * 2.1).sin() * (1.0 - st.gait);
+    let tw = BLADE + 0.3 * (hip_rel - BLADE) - 0.07 * st.gait * ph.sin() * st.stride.z;
+    let travel = move_yaw - (aim + tw);
+    st.lean_f = damp(st.lean_f, if moving { travel.cos() } else { 0.0 }, 8.0, dt);
+    st.lean_s = damp(st.lean_s, if moving { travel.sin() } else { 0.0 }, 8.0, dt);
+    st.kick *= (-14.0 * dt).exp();
+
+    let upper_pos = Vec3::new(0.0, pelvis_y + 0.1 + 0.006 * breathe, 0.0);
+    let upper_rot = Quat::from_euler(
+        EulerRot::YXZ,
+        tw,
+        0.05 + 0.1 * st.lean_f * st.gait - 0.08 * st.kick,
+        -0.07 * st.lean_s * st.gait,
+    );
+    let upper_m = Mat4::from_rotation_translation(upper_rot, upper_pos);
+    if let Ok(mut tf) = transforms.get_mut(rig.upper) {
+        tf.translation = upper_pos;
+        tf.rotation = upper_rot;
+    }
+
+    // Reload
+    st.reload = damp(st.reload, if st.reloading { 1.0 } else { 0.0 }, if st.reloading { 14.0 } else { 9.0 }, dt);
+    let rl = ease(st.reload);
+    let u = if st.reloading { st.reload_t / st.reload_time } else { 1.0 };
+
+    if let Ok(mut tf) = transforms.get_mut(rig.head) {
+        tf.rotation = Quat::from_euler(EulerRot::YXZ, -tw * 0.85 + 0.25 * rl, 0.1 + 0.32 * rl, 0.0);
+    }
+
+    // Rifle
+    let pocket_w = upper_m.transform_point3(POCKET);
+    let gun_pos = Vec3::new(
+        pocket_w.x + 0.1 * rl,
+        pocket_w.y - 0.1 * rl + 0.012 * breathe,
+        pocket_w.z - 0.11 * st.kick - 0.08 * rl,
+    );
+    let gun_rot = Quat::from_euler(
+        EulerRot::YXZ,
+        0.15 * rl,
+        -0.16 * st.kick - 0.35 * rl + 0.01 * (st.t * 1.3).sin(),
+        0.65 * rl,
+    );
+    let gun_m = Mat4::from_rotation_translation(gun_rot, gun_pos);
+    if let Ok(mut tf) = transforms.get_mut(rig.gun) {
+        tf.translation = gun_pos;
+        tf.rotation = gun_rot;
+    }
+
+    // Magazine
+    if !st.reloading || u < 0.12 {
+        st.mag_dropped = false;
+    }
+    let mut mag_drop = 0.0;
+    if st.reloading && u >= 0.12 && u < 0.22 {
+        mag_drop = 0.24 * ease((u - 0.12) / 0.1);
+    }
+    if st.reloading && u >= 0.78 {
+        mag_drop = 0.2 * (1.0 - ease(((u - 0.78) / 0.17).min(1.0)));
+    }
+    if let Ok(mut tf) = transforms.get_mut(rig.mag) {
+        tf.translation.y = MAG_Y - mag_drop;
+    }
+    let mag_vis = !st.reloading || u < 0.22 || u >= 0.78;
+    if let Ok(mut vis) = visibilities.get_mut(rig.mag) {
+        *vis = if mag_vis { Visibility::Inherited } else { Visibility::Hidden };
+    }
+
+    // Arms & Hands
+    let g_r = gun_m.transform_point3(GRIP_R);
+    let mut g_l = gun_m.transform_point3(GRIP_L);
+    if st.reload > 0.001 {
+        g_l = g_l.lerp(reload_hand(u, gun_m, upper_m), rl);
+    }
+
+    let mut left_wrist = Vec3::ZERO;
+    for (i, arm) in rig.arms.iter().enumerate() {
+        let sh = upper_m.transform_point3(arm.shoulder);
+        let target = if arm.side < 0.0 { g_r } else { g_l };
+        let elbow = ik2(sh, target, UPPER_ARM, FOREARM, arm.pole);
+        let wrist = elbow + (target - elbow).normalize_or_zero() * FOREARM;
+        if i == 0 {
+            left_wrist = wrist;
+        }
+        if let Ok(mut tf) = transforms.get_mut(arm.upper) {
+            *tf = bone_transform(sh, elbow, arm.pole);
+        }
+        if let Ok(mut tf) = transforms.get_mut(arm.forearm) {
+            *tf = bone_transform(elbow, wrist, arm.pole);
+        }
+        if let Ok(mut tf) = transforms.get_mut(arm.hand) {
+            tf.translation = wrist;
+            tf.rotation = gun_rot;
+        }
+    }
+
+    let spare_vis = st.reloading && u >= 0.45 && u < 0.78;
+    if let Ok(mut vis) = visibilities.get_mut(rig.spare_mag) {
+        *vis = if spare_vis { Visibility::Inherited } else { Visibility::Hidden };
+    }
+    if spare_vis {
+        if let Ok(mut tf) = transforms.get_mut(rig.spare_mag) {
+            tf.rotation = gun_rot;
+            tf.translation = left_wrist + gun_rot * Vec3::new(0.0, 0.13, 0.0);
+        }
+    }
 }

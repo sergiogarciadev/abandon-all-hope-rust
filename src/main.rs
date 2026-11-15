@@ -4,8 +4,8 @@ mod world;
 
 use bevy::prelude::*;
 
-use entities::player::setup_player;
-use entities::zombies::setup_zombie_assets;
+use entities::player::{PlayerRigState, animate_player, demo_player_movement, setup_player};
+use entities::zombies::{animate_preview_zombies, setup_zombie_assets};
 use world::openings::Openings;
 use world::solids::SolidsNav;
 use world::world::{WallBoxes, WorldWeatherLevel, setup_world, update_world};
@@ -29,6 +29,7 @@ fn main() {
         .init_resource::<WallBoxes>()
         .init_resource::<Openings>()
         .init_resource::<WorldWeatherLevel>()
+        .init_resource::<PlayerRigState>()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "ABANDON ALL HOPE".into(),
@@ -39,7 +40,14 @@ fn main() {
         }))
         .init_state::<GameState>()
         .add_systems(Startup, (setup_basic_camera, setup_world, setup_player, setup_zombie_assets))
-        .add_systems(Update, update_world)
+        .add_systems(
+            Update,
+            (
+                update_world,
+                (demo_player_movement, animate_player).chain(),
+                animate_preview_zombies,
+            ),
+        )
         .run();
 }
 
